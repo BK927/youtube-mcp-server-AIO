@@ -6,7 +6,7 @@ param(
   [string]$Region = "asia-northeast1",
   [string]$RepositoryName = "mcp",
   [string]$RuntimeServiceAccountName = "youtube-mcp-runner",
-  [string]$ApiKeyId = "youtube-mcp-aio-v1"
+  [string]$ApiKeyId = "youtube-mcp-aio-v2"
 )
 
 Set-StrictMode -Version Latest
@@ -151,7 +151,8 @@ if (-not (Test-GcloudResource services api-keys describe $ApiKeyId --project $Pr
     --project $ProjectId `
     --key-id $ApiKeyId `
     --display-name "YouTube MCP Data API" `
-    --api-target "service=youtube.googleapis.com"
+    --api-target "service=youtube.googleapis.com" `
+    --format "value(name)"
 }
 if (-not (Get-LatestSecretVersion "youtube-data-api-key")) {
   $apiKey = (& gcloud services api-keys get-key-string $ApiKeyId `
