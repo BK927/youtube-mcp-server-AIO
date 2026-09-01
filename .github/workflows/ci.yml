@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  frozen-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.12.0"
+          cache: npm
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Frozen install
+        run: npm ci
+      - name: Release and plugin contract
+        run: python scripts/validate-release-contract.py
+      - name: Typecheck, tests, and production build
+        run: npm run check
+
+  firestore-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.12.0"
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Frozen install
+        run: npm ci
+      - name: Create temporary emulator configuration
+        run: >-
+          node -e "require('node:fs').writeFileSync(
+          process.env.RUNNER_TEMP + '/youtube-mcp-firebase.json',
+          JSON.stringify({emulators:{firestore:{host:'127.0.0.1',port:8085}}}))"
+      - name: Firestore transaction test
+        run: >-
+          npx --yes firebase-tools@15.28.2
+          --config "$RUNNER_TEMP/youtube-mcp-firebase.json"
+          emulators:exec --only firestore --project demo-youtube-mcp-ci
+          "npm run test:firestore-emulator"

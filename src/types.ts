@@ -1,5 +1,7 @@
 export type ProviderMode = "hybrid" | "official" | "unofficial";
 export type TranscriptProviderName = "yt-dlp" | "youtubejs";
+export type QuotaStoreMode = "memory" | "firestore";
+export type CursorSecretSource = "explicit" | "mcp-access-token" | "ephemeral";
 
 export interface AppConfig {
   apiKey: string | undefined;
@@ -12,7 +14,12 @@ export interface AppConfig {
   cacheTtlMs: number;
   apiDailyBudget: number;
   searchDailyBudget: number;
-  enableWriteTools: boolean;
+  cursorSecret: string;
+  cursorSecretSource: CursorSecretSource;
+  cursorTtlMs: number;
+  maxResultBytes: number;
+  quotaStoreMode: QuotaStoreMode;
+  firestoreProjectId: string | undefined;
 }
 
 export interface TranscriptSegment {

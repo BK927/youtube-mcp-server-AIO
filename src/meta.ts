@@ -1,2 +1,2 @@
-export const SERVER_NAME = "youtube-mcp-server-aio";
-export const SERVER_VERSION = "0.2.0";
+export const SERVER_NAME = "youtube-mcp-aio";
+export const SERVER_VERSION = "1.1.0";

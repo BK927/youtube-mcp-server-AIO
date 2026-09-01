@@ -1,3 +1,21 @@
+export const PUBLIC_ERROR_CODES = [
+  "INVALID_ARGUMENT",
+  "AMBIGUOUS_REFERENCE",
+  "NOT_FOUND",
+  "AUTH_REQUIRED",
+  "PROVIDER_UNAVAILABLE",
+  "CURSOR_MISMATCH",
+  "RATE_LIMITED",
+  "UPSTREAM_ERROR",
+  "TIMEOUT",
+  "JOB_NOT_READY",
+  "JOB_EXPIRED",
+] as const;
+
+export type PublicErrorCode = (typeof PUBLIC_ERROR_CODES)[number];
+
+const PUBLIC_ERROR_CODE_SET = new Set<string>(PUBLIC_ERROR_CODES);
+
 export class YouTubeMcpError extends Error {
   readonly code: string;
   readonly details: unknown;
@@ -16,21 +34,43 @@ export function errorMessage(error: unknown): string {
   return "Unknown error";
 }
 
-export function errorPayload(error: unknown): Record<string, unknown> {
+function mappedCode(error: unknown): PublicErrorCode {
   if (error instanceof YouTubeMcpError) {
-    return {
-      error: {
-        code: error.code,
-        message: error.message,
-        details: error.details ?? null,
-      },
-    };
+    if (PUBLIC_ERROR_CODE_SET.has(error.code)) {
+      return error.code as PublicErrorCode;
+    }
+    if (error.code === "YOUTUBE_API_KEY_REQUIRED") return "AUTH_REQUIRED";
+    if (error.code.endsWith("_NOT_FOUND")) return "NOT_FOUND";
+    if (error.code.startsWith("INVALID_")) return "INVALID_ARGUMENT";
+    if (error.code.includes("QUOTA") || error.code.includes("RATE")) {
+      return "RATE_LIMITED";
+    }
+    if (error.code.includes("TRANSCRIPT_PROVIDER")) {
+      return "PROVIDER_UNAVAILABLE";
+    }
+    if (error.code.includes("TIMEOUT")) return "TIMEOUT";
   }
+  if (error instanceof Error && error.name === "AbortError") return "TIMEOUT";
+  return "UPSTREAM_ERROR";
+}
 
+export function errorPayload(
+  error: unknown,
+  schemaUri = "youtube://schema/error",
+): Record<string, unknown> {
+  const code = mappedCode(error);
+  const known = error instanceof YouTubeMcpError;
   return {
-    error: {
-      code: "INTERNAL_ERROR",
-      message: errorMessage(error),
-    },
+    code,
+    message: known ? error.message : "The upstream operation could not be completed.",
+    retryable: [
+      "PROVIDER_UNAVAILABLE",
+      "RATE_LIMITED",
+      "UPSTREAM_ERROR",
+      "TIMEOUT",
+      "JOB_NOT_READY",
+    ].includes(code),
+    schema_uri: schemaUri,
+    details: known ? error.details ?? {} : {},
   };
 }

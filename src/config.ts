@@ -1,8 +1,10 @@
 import type {
   AppConfig,
   ProviderMode,
+  QuotaStoreMode,
   TranscriptProviderName,
 } from "./types.js";
+import { randomBytes } from "node:crypto";
 
 const PROVIDER_MODES = new Set<ProviderMode>([
   "hybrid",
@@ -13,6 +15,7 @@ const TRANSCRIPT_PROVIDERS = new Set<TranscriptProviderName>([
   "yt-dlp",
   "youtubejs",
 ]);
+const QUOTA_STORE_MODES = new Set<QuotaStoreMode>(["memory", "firestore"]);
 
 function readPositiveInteger(
   name: string,
@@ -29,17 +32,21 @@ function readPositiveInteger(
   return parsed;
 }
 
-function readBoolean(name: string, fallback: boolean): boolean {
-  const raw = process.env[name]?.trim().toLowerCase();
-  if (!raw) return fallback;
-  if (["1", "true", "yes", "on"].includes(raw)) return true;
-  if (["0", "false", "no", "off"].includes(raw)) return false;
-  throw new Error(`${name} must be true or false.`);
+function readIntegerRange(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = readPositiveInteger(name, fallback, minimum);
+  if (value > maximum) {
+    throw new Error(`${name} must not exceed ${maximum}.`);
+  }
+  return value;
 }
 
 function readProviderMode(): ProviderMode {
-  const raw = (process.env.YOUTUBE_PROVIDER_MODE ?? "hybrid")
-    .trim()
+  const raw = (process.env.YOUTUBE_PROVIDER_MODE?.trim() || "hybrid")
     .toLowerCase() as ProviderMode;
   if (!PROVIDER_MODES.has(raw)) {
     throw new Error(
@@ -70,9 +77,25 @@ function readTranscriptProviders(): TranscriptProviderName[] {
   return unique;
 }
 
+function readQuotaStoreMode(): QuotaStoreMode {
+  const raw = (process.env.YOUTUBE_QUOTA_STORE?.trim() || "memory")
+    .toLowerCase() as QuotaStoreMode;
+  if (!QUOTA_STORE_MODES.has(raw)) {
+    throw new Error("YOUTUBE_QUOTA_STORE must be memory or firestore.");
+  }
+  return raw;
+}
+
 export function loadConfig(): AppConfig {
   const apiKey = process.env.YOUTUBE_API_KEY?.trim() || undefined;
   const providerMode = readProviderMode();
+  const explicitCursorSecret = process.env.YOUTUBE_CURSOR_SECRET?.trim();
+  const mcpAccessToken = process.env.MCP_ACCESS_TOKEN?.trim();
+  const cursorSecret =
+    explicitCursorSecret || mcpAccessToken || randomBytes(32).toString("base64url");
+  if (cursorSecret.length < 32) {
+    throw new Error("YOUTUBE_CURSOR_SECRET must be at least 32 characters.");
+  }
 
   return {
     apiKey,
@@ -101,6 +124,25 @@ export function loadConfig(): AppConfig {
       90,
       1,
     ),
-    enableWriteTools: readBoolean("YOUTUBE_ENABLE_WRITE_TOOLS", false),
+    cursorSecret,
+    cursorSecretSource: explicitCursorSecret
+      ? "explicit"
+      : mcpAccessToken
+        ? "mcp-access-token"
+        : "ephemeral",
+    cursorTtlMs:
+      readIntegerRange("YOUTUBE_CURSOR_TTL_SECONDS", 86_400, 30, 604_800) *
+      1_000,
+    maxResultBytes: readIntegerRange(
+      "YOUTUBE_MAX_RESULT_BYTES",
+      12 * 1_024,
+      4 * 1_024,
+      32 * 1_024,
+    ),
+    quotaStoreMode: readQuotaStoreMode(),
+    firestoreProjectId:
+      process.env.GOOGLE_CLOUD_PROJECT?.trim() ||
+      process.env.GCLOUD_PROJECT?.trim() ||
+      undefined,
   };
 }

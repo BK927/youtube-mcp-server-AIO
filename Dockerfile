@@ -1,4 +1,5 @@
-FROM node:24-bookworm-slim AS build
+ARG NODE_IMAGE="node:24.12.0-bookworm-slim@sha256:7326fb2dbdce998edd72140946851be64ef4a643e8715e138ca467e8e9d92c99"
+FROM ${NODE_IMAGE} AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -8,7 +9,9 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:24-bookworm-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
+
+ARG YT_DLP_VERSION="2026.8.19"
 
 ENV NODE_ENV=production \
     MCP_TRANSPORT=http \
@@ -20,7 +23,7 @@ ENV NODE_ENV=production \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv \
     && python3 -m venv /opt/yt-dlp \
-    && /opt/yt-dlp/bin/pip install --no-cache-dir yt-dlp \
+    && /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp==${YT_DLP_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

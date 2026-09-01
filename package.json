@@ -1,6 +1,6 @@
 {
   "name": "youtube-mcp-server-aio",
-  "version": "0.2.0",
+  "version": "1.1.0",
   "description": "Evidence-first, quota-aware all-in-one YouTube MCP server",
   "type": "module",
   "bin": {
@@ -22,6 +22,7 @@
     "start:http": "node dist/index.js --http",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
+    "test:firestore-emulator": "vitest run tests/firestore-emulator.test.ts",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "keywords": [
@@ -32,6 +33,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@google-cloud/firestore": "7.11.6",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "dotenv": "17.4.2",

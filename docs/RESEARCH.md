@@ -17,7 +17,7 @@ This document records the projects and official interfaces reviewed before creat
 | [`coyaSONG/youtube-mcp-server`](https://github.com/coyaSONG/youtube-mcp-server) | Exact timestamp links, transcript search with windows and pagination, cross-video evidence, plus bearer/CORS/session controls for HTTP | Direct inspiration for citation-ready transcript search and the remote-security roadmap. |
 | [`anaisbetts/mcp-youtube`](https://github.com/anaisbetts/mcp-youtube) | Minimal transcript MCP using `yt-dlp` | Useful baseline showing why `yt-dlp` should be one provider, not the entire architecture. |
 | [`kimtaeyoon83/mcp-server-youtube-transcript`](https://github.com/kimtaeyoon83/mcp-server-youtube-transcript) | Focused transcript-only MCP | Confirms the demand for a zero-key path, while highlighting the need for metadata, evidence search, and provider fallbacks. |
-| [`LuanRT/YouTube.js`](https://github.com/LuanRT/YouTube.js) | TypeScript client for YouTube's internal InnerTube API without a Data API key | Used as an unofficial provider. The v0.1 implementation does not trust only `getTranscript()`; it also checks multiple player clients and reads caption-track URLs directly. |
+| [`LuanRT/YouTube.js`](https://github.com/LuanRT/YouTube.js) | TypeScript client for YouTube's internal InnerTube API without a Data API key | Used as an unofficial provider. The implementation does not trust only `getTranscript()`; it also checks multiple player clients and reads caption-track URLs directly. |
 
 ## Specialized ideas found across the ecosystem
 
@@ -46,7 +46,7 @@ The project uses the split stable v2 packages rather than the old monolithic v1 
 - [MCP TypeScript SDK repository](https://github.com/modelcontextprotocol/typescript-sdk)
 - [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28)
 
-The initial transport is stdio. Streamable HTTP and authorization are deferred until the local behavior and tool contracts stabilize.
+Version 1.1.0 supports both local stdio and stateless Streamable HTTP. Private remote access uses a fixed bearer while shared multi-user authorization remains outside this release.
 
 ### YouTube Data API quota model
 

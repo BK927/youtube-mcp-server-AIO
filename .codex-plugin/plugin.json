@@ -1,0 +1,32 @@
+{
+  "name": "youtube-mcp-aio",
+  "version": "1.1.0",
+  "description": "Read-only YouTube video, transcript, comment, channel, playlist, and search research.",
+  "author": {
+    "name": "youtube-mcp-server-aio contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "youtube",
+    "video",
+    "transcript",
+    "mcp"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "YouTube MCP AIO",
+    "shortDescription": "Research YouTube videos, transcripts, channels, and playlists.",
+    "longDescription": "A read-only YouTube research plugin with compact tools for video metadata, transcripts, comments, search, channels, playlists, and quota-aware access.",
+    "developerName": "youtube-mcp-server-aio contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Read-only YouTube research",
+      "Local and Cloud MCP"
+    ],
+    "defaultPrompt": [
+      "Summarize this YouTube video with timestamped evidence.",
+      "Find relevant videos from this YouTube channel.",
+      "Inspect this playlist and summarize its coverage."
+    ]
+  }
+}

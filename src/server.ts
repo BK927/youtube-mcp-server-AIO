@@ -1,9 +1,19 @@
-import { McpServer } from "@modelcontextprotocol/server";
+import {
+  McpServer,
+  ResourceNotFoundError,
+  ResourceTemplate,
+} from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { loadConfig } from "./config.js";
+import { CursorCodec } from "./cursor.js";
+import { YouTubeMcpError } from "./errors.js";
 import { SERVER_NAME, SERVER_VERSION } from "./meta.js";
-import { runTool } from "./mcp-response.js";
+import { runTool, type ToolPayload } from "./mcp-response.js";
 import type { AppConfig } from "./types.js";
+import {
+  extractPlaylistId,
+  extractVideoId,
+} from "./utils/ids.js";
 import {
   YouTubeService,
   type ServiceRuntimeInfo,
@@ -16,344 +26,862 @@ const readOnlyAnnotations = {
   openWorldHint: true,
 };
 
-const pageToken = z
-  .string()
-  .min(1)
-  .optional()
-  .describe("Opaque nextPageToken returned by a previous call.");
+const cursorSchema = z.string().min(1).optional();
+const limitSchema = z.number().int().min(1).max(100).default(10);
+const filtersSchema = z.record(z.string(), z.unknown()).default({});
+
+const TOOL_SCHEMAS: Record<string, unknown> = {
+  youtube_video_get: {
+    required: ["video"],
+    fields: {
+      video: "YouTube video ID or URL",
+      view: ["metadata", "transcript", "comments"],
+      options: {
+        transcript: ["language", "include_text", "include_timestamps"],
+        comments: ["order", "include_replies"],
+      },
+      cursor: "opaque signed cursor",
+      limit: "1..100",
+      max_chars: "256..12000",
+      locale: "preferred language code",
+    },
+  },
+  youtube_search: {
+    fields: {
+      scope: ["global", "channel", "transcript", "trending"],
+      query: "required for global/transcript; optional for channel",
+      within: "channel for channel scope; video for transcript scope",
+      filters: "scope-specific filter object",
+      cursor: "opaque signed cursor",
+      limit: "1..100",
+      locale: "preferred language code",
+    },
+  },
+  youtube_channel_get: {
+    required: ["channel"],
+    fields: {
+      channel: "channel ID, @handle, URL, username, or name",
+      select: ["profile", "statistics", "branding", "uploads_playlist"],
+    },
+  },
+  youtube_playlist_get: {
+    required: ["playlist"],
+    fields: {
+      playlist: "playlist ID or URL",
+      include_items: "include one signed item page",
+      cursor: "opaque signed cursor",
+      limit: "1..100",
+    },
+  },
+  error: {
+    fields: ["code", "message", "retryable", "schema_uri", "details"],
+  },
+};
 
 export interface CreateYoutubeMcpServerOptions {
   service?: YouTubeService;
   runtime?: ServiceRuntimeInfo;
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function requireArgument(value: string, name: string): string {
+  const normalized = value.trim();
+  if (normalized) return normalized;
+  throw new YouTubeMcpError(
+    "INVALID_ARGUMENT",
+    `${name} is required for this operation.`,
+    { name },
+  );
+}
+
+function assertNoArgument(value: string, name: string): void {
+  if (!value.trim()) return;
+  throw new YouTubeMcpError(
+    "INVALID_ARGUMENT",
+    `${name} is not accepted for this scope.`,
+    { name },
+  );
+}
+
+function checkedFilters(
+  filters: Record<string, unknown>,
+  allowed: readonly string[],
+): Record<string, unknown> {
+  const unexpected = Object.keys(filters).filter((key) => !allowed.includes(key));
+  if (unexpected.length > 0) {
+    throw new YouTubeMcpError(
+      "INVALID_ARGUMENT",
+      "One or more filters are not supported for this view or scope.",
+      { unexpected, allowed },
+    );
+  }
+  return filters;
+}
+
+function stringFilter(
+  filters: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = filters[key];
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") {
+    throw new YouTubeMcpError("INVALID_ARGUMENT", `${key} must be a string.`);
+  }
+  return value.trim() || undefined;
+}
+
+function booleanFilter(
+  filters: Record<string, unknown>,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const value = filters[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") {
+    throw new YouTubeMcpError("INVALID_ARGUMENT", `${key} must be a boolean.`);
+  }
+  return value;
+}
+
+function integerFilter(
+  filters: Record<string, unknown>,
+  key: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = filters[key];
+  if (value === undefined) return fallback;
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
+    throw new YouTubeMcpError(
+      "INVALID_ARGUMENT",
+      `${key} must be an integer from ${minimum} to ${maximum}.`,
+    );
+  }
+  return value;
+}
+
+function enumFilter<const T extends string>(
+  filters: Record<string, unknown>,
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  const value = filters[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    throw new YouTubeMcpError(
+      "INVALID_ARGUMENT",
+      `${key} must be one of: ${allowed.join(", ")}.`,
+    );
+  }
+  return value as T;
+}
+
+function timeFilter(
+  filters: Record<string, unknown>,
+  key: string,
+): string | number | undefined {
+  const value = filters[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new YouTubeMcpError(
+      "INVALID_ARGUMENT",
+      `${key} must be a timestamp string or seconds.`,
+    );
+  }
+  return value;
+}
+
+function pageToken(
+  codec: CursorCodec,
+  cursor: string | undefined,
+  operation: string,
+  filters: Record<string, unknown>,
+): string | undefined {
+  if (!cursor) return undefined;
+  const value = codec.decode(cursor, operation, filters).pageToken;
+  if (typeof value !== "string" || !value) {
+    throw new YouTubeMcpError("CURSOR_MISMATCH", "The cursor state is invalid.");
+  }
+  return value;
+}
+
+function offset(
+  codec: CursorCodec,
+  cursor: string | undefined,
+  operation: string,
+  filters: Record<string, unknown>,
+): number {
+  if (!cursor) return 0;
+  const value = codec.decode(cursor, operation, filters).offset;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new YouTubeMcpError("CURSOR_MISMATCH", "The cursor state is invalid.");
+  }
+  return value;
+}
+
+function nextCursor(
+  codec: CursorCodec,
+  operation: string,
+  filters: Record<string, unknown>,
+  state: Record<string, unknown> | undefined,
+): string | null {
+  return state ? codec.encode(operation, filters, state) : null;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function provider(value: Record<string, unknown>): string | null {
+  return typeof value.provider === "string" ? value.provider : null;
+}
+
+function without(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const copy = { ...value };
+  for (const key of keys) delete copy[key];
+  return copy;
+}
+
+function capPayloadText(
+  data: unknown,
+  items: unknown[],
+  maxChars: number,
+): { data: unknown; items: unknown[] } {
+  let remaining = maxChars;
+  const visit = (item: unknown): unknown => {
+    if (typeof item === "string") {
+      if (remaining <= 0) return "";
+      const capped = item.slice(0, remaining);
+      remaining -= capped.length;
+      return capped.length < item.length && capped.length >= 3
+        ? `${capped.slice(0, -3)}...`
+        : capped;
+    }
+    if (Array.isArray(item)) return item.map(visit);
+    if (!item || typeof item !== "object") return item;
+    return Object.fromEntries(
+      Object.entries(item as Record<string, unknown>).map(([key, child]) => [
+        key,
+        visit(child),
+      ]),
+    );
+  };
+  return {
+    data: visit(data),
+    items: visit(items) as unknown[],
+  };
+}
+
+type ChannelSelection =
+  | "profile"
+  | "statistics"
+  | "branding"
+  | "uploads_playlist";
+
+function selectChannel(
+  channel: Record<string, unknown>,
+  select: ChannelSelection[],
+): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  if (select.includes("profile")) {
+    for (const key of [
+      "id",
+      "url",
+      "title",
+      "description",
+      "customUrl",
+      "publishedAt",
+      "country",
+      "defaultLanguage",
+      "thumbnails",
+      "provider",
+      "resolution",
+    ]) {
+      if (key in channel) output[key] = channel[key];
+    }
+  }
+  if (select.includes("statistics")) output.statistics = channel.statistics ?? {};
+  if (select.includes("branding")) {
+    output.brandingSettings = channel.brandingSettings ?? {};
+  }
+  if (select.includes("uploads_playlist")) {
+    output.uploadsPlaylistId = channel.uploadsPlaylistId ?? null;
+  }
+  return output;
+}
+
+function freshUntil(config: AppConfig): string {
+  return new Date(Date.now() + config.cacheTtlMs).toISOString();
+}
+
+function payload(
+  kind: ToolPayload["kind"],
+  data: unknown,
+  items: unknown[],
+  cursor: string | null,
+  canonicalUri: string | null,
+  sourceRecord: Record<string, unknown>,
+  quotaCost: { data: number; search: number },
+  untrustedFields: string[],
+  config: AppConfig,
+  maxChars?: number,
+): ToolPayload {
+  const capped =
+    maxChars === undefined
+      ? { data, items }
+      : capPayloadText(data, items, maxChars);
+  return {
+    kind,
+    data: capped.data,
+    items: capped.items,
+    page: {
+      returned: items.length,
+      has_more: Boolean(cursor),
+      next_cursor: cursor,
+    },
+    meta: {
+      canonical_uri: canonicalUri,
+      source: "youtube",
+      provider: provider(sourceRecord) ?? "unknown",
+      fresh_until: freshUntil(config),
+      quota_cost: quotaCost,
+      warnings: stringArray(sourceRecord.warnings),
+      untrusted_fields: untrustedFields,
+    },
+  };
+}
+
+function templateVariable(
+  variables: Record<string, string | string[]>,
+  name: string,
+): string {
+  const value = variables[name];
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function jsonResource(uri: URL, value: unknown) {
+  return {
+    contents: [
+      {
+        uri: uri.href,
+        mimeType: "application/json",
+        text: JSON.stringify(value),
+      },
+    ],
+  };
+}
+
 export function createYoutubeMcpServer(
   config: AppConfig = loadConfig(),
   options: CreateYoutubeMcpServerOptions = {},
 ): McpServer {
-  const server = new McpServer({
-    name: SERVER_NAME,
-    version: SERVER_VERSION,
-  });
-  const service = options.service ?? new YouTubeService(config);
-
-  server.registerTool(
-    "youtube_capabilities",
+  const server = new McpServer(
+    { name: SERVER_NAME, version: SERVER_VERSION },
     {
-      title: "YouTube MCP capabilities",
-      description:
-        "Inspect configured YouTube providers, API-key status, transcript fallbacks, safeguards, and currently available tool groups. Call this first when provider availability is uncertain.",
-      inputSchema: z.object({}),
-      annotations: readOnlyAnnotations,
+      instructions:
+        "Read-only YouTube research. Use catalog resources for capabilities and schemas.",
     },
-    async () => runTool(() => service.capabilities(options.runtime)),
   );
+  const service = options.service ?? new YouTubeService(config);
+  const codec = new CursorCodec(config.cursorSecret, config.cursorTtlMs);
 
   server.registerTool(
     "youtube_video_get",
     {
-      title: "Get YouTube video metadata",
-      description:
-        "Get normalized metadata for one video ID or URL. Uses the official Data API when configured, otherwise returns limited no-key oEmbed metadata.",
+      description: "Get one video's metadata, transcript page, or comments page.",
       inputSchema: z.object({
-        video: z
-          .string()
-          .min(1)
-          .describe("YouTube video ID or watch, short, live, embed, or youtu.be URL."),
+        video: z.string().min(1),
+        view: z.enum(["metadata", "transcript", "comments"]).default("metadata"),
+        options: filtersSchema,
+        cursor: cursorSchema,
+        limit: limitSchema,
+        max_chars: z.number().int().min(256).max(12_000).default(4_000),
+        locale: z.string().default(""),
       }),
       annotations: readOnlyAnnotations,
     },
-    async ({ video }) => runTool(() => service.getVideo(video)),
-  );
+    async ({ video, view, options, cursor, limit, max_chars: maxChars, locale }) =>
+      runTool("youtube_video_get", async () => {
+        const videoId = extractVideoId(video);
+        const canonicalUri = `youtube://entity/video/${videoId}`;
+        if (view === "metadata") {
+          checkedFilters(options, []);
+          if (cursor) {
+            throw new YouTubeMcpError(
+              "INVALID_ARGUMENT",
+              "metadata view does not use a cursor.",
+            );
+          }
+          const result = await service.getVideo(videoId);
+          return payload(
+            "entity",
+            without(result, ["warnings"]),
+            [],
+            null,
+            canonicalUri,
+            result,
+            { data: provider(result) === "youtube-data-api-v3" ? 1 : 0, search: 0 },
+            ["data.title", "data.description", "data.tags"],
+            config,
+            maxChars,
+          );
+        }
 
-  server.registerTool(
-    "youtube_transcript_get",
-    {
-      title: "Get a paginated YouTube transcript",
-      description:
-        "Retrieve timestamped transcript segments with direct citation links. Results are paginated to prevent context flooding. Public-video transcripts use the configured unofficial provider chain.",
-      inputSchema: z.object({
-        video: z.string().min(1).describe("YouTube video ID or URL."),
-        language: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("Preferred language code or provider language label."),
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .default(0)
-          .describe("Zero-based transcript segment offset."),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(1_000)
-          .default(200)
-          .describe("Maximum transcript segments returned in this page."),
-        includeText: z
-          .boolean()
-          .default(false)
-          .describe("Also render the returned page as one newline-delimited text block."),
-        includeTimestamps: z
-          .boolean()
-          .default(true)
-          .describe("Prefix lines in the optional text block with timestamps."),
-      }),
-      annotations: readOnlyAnnotations,
-    },
-    async ({
-      video,
-      language,
-      offset,
-      limit,
-      includeText,
-      includeTimestamps,
-    }) =>
-      runTool(() =>
-        service.getTranscript(video, {
-          language,
-          offset,
-          limit,
-          includeText,
-          includeTimestamps,
-        }),
-      ),
-  );
+        if (view === "transcript") {
+          const normalized = checkedFilters(options, [
+            "language",
+            "include_text",
+            "include_timestamps",
+          ]);
+          const language =
+            (stringFilter(normalized, "language") ?? locale.trim()) || undefined;
+          const includeText = booleanFilter(normalized, "include_text", false);
+          const includeTimestamps = booleanFilter(
+            normalized,
+            "include_timestamps",
+            true,
+          );
+          const cursorFilters = {
+            videoId,
+            view,
+            language: language ?? null,
+            includeText,
+            includeTimestamps,
+          };
+          const result = await service.getTranscript(videoId, {
+            language,
+            offset: offset(codec, cursor, "youtube_video_get", cursorFilters),
+            limit,
+            includeText,
+            includeTimestamps,
+          });
+          const resultRecord = record(result);
+          const next =
+            result.nextOffset === undefined
+              ? null
+              : nextCursor(codec, "youtube_video_get", cursorFilters, {
+                  offset: result.nextOffset,
+                });
+          return payload(
+            "collection",
+            without(resultRecord, ["segments", "nextOffset", "warnings"]),
+            result.segments,
+            next,
+            canonicalUri,
+            resultRecord,
+            { data: 0, search: 0 },
+            ["items[].text", "data.text"],
+            config,
+            maxChars,
+          );
+        }
 
-  server.registerTool(
-    "youtube_transcript_search",
-    {
-      title: "Search inside a YouTube transcript",
-      description:
-        "Find exact evidence inside a video's transcript. Returns timestamp links and surrounding segments, with optional time-window and paginated match controls.",
-      inputSchema: z.object({
-        video: z.string().min(1).describe("YouTube video ID or URL."),
-        query: z.string().min(1).describe("Text to find in transcript segments."),
-        language: z.string().min(1).optional(),
-        matchMode: z.enum(["substring", "word"]).default("substring"),
-        caseSensitive: z.boolean().default(false),
-        contextSegments: z
-          .number()
-          .int()
-          .min(0)
-          .max(10)
-          .default(1)
-          .describe("Segments included before and after each matching segment."),
-        from: z
-          .union([z.string(), z.number().nonnegative()])
-          .optional()
-          .describe("Start of search window: seconds, MM:SS, HH:MM:SS, or 1h2m3s."),
-        to: z
-          .union([z.string(), z.number().nonnegative()])
-          .optional()
-          .describe("End of search window in the same formats as from."),
-        offset: z.number().int().min(0).default(0),
-        limit: z.number().int().min(1).max(100).default(25),
-      }),
-      annotations: readOnlyAnnotations,
-    },
-    async ({
-      video,
-      query,
-      language,
-      matchMode,
-      caseSensitive,
-      contextSegments,
-      from,
-      to,
-      offset,
-      limit,
-    }) =>
-      runTool(() =>
-        service.searchTranscript(video, query, {
-          language,
-          matchMode,
-          caseSensitive,
-          contextSegments,
-          from,
-          to,
-          offset,
+        const normalized = checkedFilters(options, ["order", "include_replies"]);
+        const order = enumFilter(normalized, "order", ["relevance", "time"], "relevance");
+        const includeReplies = booleanFilter(normalized, "include_replies", true);
+        const cursorFilters = { videoId, view, order, includeReplies };
+        const result = await service.listComments(
+          videoId,
           limit,
-        }),
-      ),
+          pageToken(codec, cursor, "youtube_video_get", cursorFilters),
+          order,
+          includeReplies,
+        );
+        const items = Array.isArray(result.items) ? result.items : [];
+        const next =
+          typeof result.nextPageToken === "string"
+            ? nextCursor(codec, "youtube_video_get", cursorFilters, {
+                pageToken: result.nextPageToken,
+              })
+            : null;
+        return payload(
+          "collection",
+          without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]),
+          items,
+          next,
+          canonicalUri,
+          result,
+          { data: 1, search: 0 },
+          ["items[].author.name", "items[].topLevelComment.text", "items[].replies[].text"],
+          config,
+          maxChars,
+        );
+      }, config.maxResultBytes),
   );
 
   server.registerTool(
     "youtube_search",
     {
-      title: "Search YouTube videos",
-      description:
-        "Search public videos with the official YouTube Data API. Requires YOUTUBE_API_KEY and spends one call from the separately guarded search.list bucket per page.",
+      description: "Search globally, within a channel or transcript, or get trending videos.",
       inputSchema: z.object({
-        query: z.string().min(1),
-        maxResults: z.number().int().min(1).max(50).default(10),
-        pageToken,
-        order: z
-          .enum(["date", "rating", "relevance", "title", "viewCount"])
-          .default("relevance"),
-        channelId: z.string().min(1).optional(),
-        publishedAfter: z
-          .string()
-          .optional()
-          .describe("RFC 3339 timestamp, for example 2026-01-01T00:00:00Z."),
-        publishedBefore: z.string().optional().describe("RFC 3339 timestamp."),
-        regionCode: z.string().length(2).optional(),
-        relevanceLanguage: z.string().min(2).optional(),
-        safeSearch: z.enum(["moderate", "none", "strict"]).default("moderate"),
-        videoDuration: z
-          .enum(["any", "long", "medium", "short"])
-          .default("any"),
+        scope: z.enum(["global", "channel", "transcript", "trending"]).default("global"),
+        query: z.string().default(""),
+        within: z.string().default(""),
+        filters: filtersSchema,
+        cursor: cursorSchema,
+        limit: limitSchema,
+        locale: z.string().default(""),
       }),
       annotations: readOnlyAnnotations,
     },
-    async ({
-      query,
-      maxResults,
-      pageToken: token,
-      order,
-      channelId,
-      publishedAfter,
-      publishedBefore,
-      regionCode,
-      relevanceLanguage,
-      safeSearch,
-      videoDuration,
-    }) =>
-      runTool(() =>
-        service.searchVideos(query, {
-          maxResults,
-          pageToken: token,
-          order,
-          channelId,
-          publishedAfter,
-          publishedBefore,
-          regionCode,
-          relevanceLanguage,
-          safeSearch,
-          videoDuration,
-        }),
-      ),
+    async ({ scope, query, within, filters, cursor, limit, locale }) =>
+      runTool("youtube_search", async () => {
+        if (scope === "global") {
+          const normalized = checkedFilters(filters, [
+            "order",
+            "channel_id",
+            "published_after",
+            "published_before",
+            "region",
+            "relevance_language",
+            "safe_search",
+            "video_duration",
+          ]);
+          const normalizedQuery = requireArgument(query, "query");
+          assertNoArgument(within, "within");
+          const searchFilters = {
+            scope,
+            query: normalizedQuery,
+            order: enumFilter(
+              normalized,
+              "order",
+              ["date", "rating", "relevance", "title", "videoCount", "viewCount"],
+              "relevance",
+            ),
+            channelId: stringFilter(normalized, "channel_id"),
+            publishedAfter: stringFilter(normalized, "published_after"),
+            publishedBefore: stringFilter(normalized, "published_before"),
+            regionCode: stringFilter(normalized, "region"),
+            relevanceLanguage:
+              stringFilter(normalized, "relevance_language") || locale.trim() || undefined,
+            safeSearch: enumFilter(
+              normalized,
+              "safe_search",
+              ["moderate", "none", "strict"],
+              "moderate",
+            ),
+            videoDuration: enumFilter(
+              normalized,
+              "video_duration",
+              ["any", "long", "medium", "short"],
+              "any",
+            ),
+          };
+          const result = await service.searchVideos(normalizedQuery, {
+            maxResults: Math.min(limit, 50),
+            pageToken: pageToken(codec, cursor, "youtube_search", searchFilters),
+            ...searchFilters,
+          });
+          const items = Array.isArray(result.items) ? result.items : [];
+          const next =
+            typeof result.nextPageToken === "string"
+              ? nextCursor(codec, "youtube_search", searchFilters, {
+                  pageToken: result.nextPageToken,
+                })
+              : null;
+          return payload(
+            "collection",
+            without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]),
+            items,
+            next,
+            null,
+            result,
+            { data: 0, search: 1 },
+            ["items[].title", "items[].description", "items[].channelTitle"],
+            config,
+          );
+        }
+
+        if (scope === "channel") {
+          checkedFilters(filters, []);
+          const channel = requireArgument(within, "within");
+          const normalizedQuery = query.trim();
+          const searchFilters = { scope, channel, query: normalizedQuery };
+          const result = await service.listChannelVideos(
+            channel,
+            Math.min(limit, 50),
+            pageToken(codec, cursor, "youtube_search", searchFilters),
+          );
+          const rawItems = Array.isArray(result.items) ? result.items : [];
+          const needle = normalizedQuery.toLocaleLowerCase();
+          const items = needle
+            ? rawItems.filter((item) => {
+                const value = record(item);
+                return `${String(value.title ?? "")} ${String(value.description ?? "")}`
+                  .toLocaleLowerCase()
+                  .includes(needle);
+              })
+            : rawItems;
+          const next =
+            typeof result.nextPageToken === "string"
+              ? nextCursor(codec, "youtube_search", searchFilters, {
+                  pageToken: result.nextPageToken,
+                })
+              : null;
+          const channelRecord = record(result.channel);
+          const channelId =
+            typeof channelRecord.id === "string" ? channelRecord.id : channel;
+          return payload(
+            "collection",
+            without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]),
+            items,
+            next,
+            `youtube://entity/channel/${channelId}`,
+            result,
+            { data: 2, search: 0 },
+            ["data.channel.title", "data.channel.description", "items[].title", "items[].description"],
+            config,
+          );
+        }
+
+        if (scope === "transcript") {
+          const normalized = checkedFilters(filters, [
+            "language",
+            "match_mode",
+            "case_sensitive",
+            "context_segments",
+            "from",
+            "to",
+          ]);
+          const videoId = extractVideoId(requireArgument(within, "within"));
+          const normalizedQuery = requireArgument(query, "query");
+          const transcriptFilters = {
+            scope,
+            videoId,
+            query: normalizedQuery,
+            language: stringFilter(normalized, "language") || locale.trim() || undefined,
+            matchMode: enumFilter(
+              normalized,
+              "match_mode",
+              ["substring", "word"],
+              "substring",
+            ),
+            caseSensitive: booleanFilter(normalized, "case_sensitive", false),
+            contextSegments: integerFilter(
+              normalized,
+              "context_segments",
+              1,
+              0,
+              10,
+            ),
+            from: timeFilter(normalized, "from"),
+            to: timeFilter(normalized, "to"),
+          };
+          const result = await service.searchTranscript(videoId, normalizedQuery, {
+            ...transcriptFilters,
+            offset: offset(codec, cursor, "youtube_search", transcriptFilters),
+            limit,
+          });
+          const items = Array.isArray(result.matches) ? result.matches : [];
+          const next =
+            typeof result.nextOffset === "number"
+              ? nextCursor(codec, "youtube_search", transcriptFilters, {
+                  offset: result.nextOffset,
+                })
+              : null;
+          return payload(
+            "collection",
+            without(result, ["matches", "nextOffset", "warnings"]),
+            items,
+            next,
+            `youtube://entity/video/${videoId}`,
+            result,
+            { data: 0, search: 0 },
+            ["items[].text", "items[].context[].text"],
+            config,
+          );
+        }
+
+        assertNoArgument(query, "query");
+        assertNoArgument(within, "within");
+        const normalized = checkedFilters(filters, ["region", "category_id"]);
+        const trendingFilters = {
+          scope,
+          regionCode: stringFilter(normalized, "region") ?? config.defaultRegion,
+          categoryId: stringFilter(normalized, "category_id"),
+        };
+        const result = await service.trending(
+          trendingFilters.regionCode,
+          trendingFilters.categoryId,
+          Math.min(limit, 50),
+          pageToken(codec, cursor, "youtube_search", trendingFilters),
+        );
+        const items = Array.isArray(result.items) ? result.items : [];
+        const next =
+          typeof result.nextPageToken === "string"
+            ? nextCursor(codec, "youtube_search", trendingFilters, {
+                pageToken: result.nextPageToken,
+              })
+            : null;
+        return payload(
+          "collection",
+          without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]),
+          items,
+          next,
+          null,
+          result,
+          { data: 1, search: 0 },
+          ["items[].title", "items[].description", "items[].tags"],
+          config,
+        );
+      }, config.maxResultBytes),
   );
 
   server.registerTool(
     "youtube_channel_get",
     {
-      title: "Get a YouTube channel",
-      description:
-        "Resolve and retrieve an official channel profile, statistics, branding, and uploads playlist. Accepts a channel ID, @handle, URL, legacy username, or search query. Requires YOUTUBE_API_KEY.",
-      inputSchema: z.object({
-        channel: z.string().min(1).describe("Channel ID, @handle, URL, username, or name."),
-      }),
-      annotations: readOnlyAnnotations,
-    },
-    async ({ channel }) => runTool(() => service.getChannel(channel)),
-  );
-
-  server.registerTool(
-    "youtube_channel_videos",
-    {
-      title: "List a channel's uploaded videos",
-      description:
-        "List uploads through the channel's uploads playlist instead of search, preserving the limited search bucket. Requires YOUTUBE_API_KEY.",
+      description: "Resolve and get one YouTube channel profile.",
       inputSchema: z.object({
         channel: z.string().min(1),
-        maxResults: z.number().int().min(1).max(50).default(25),
-        pageToken,
+        select: z
+          .array(z.enum(["profile", "statistics", "branding", "uploads_playlist"]))
+          .min(1)
+          .default(["profile", "statistics", "branding", "uploads_playlist"]),
       }),
       annotations: readOnlyAnnotations,
     },
-    async ({ channel, maxResults, pageToken: token }) =>
-      runTool(() => service.listChannelVideos(channel, maxResults, token)),
+    async ({ channel, select }) =>
+      runTool("youtube_channel_get", async () => {
+        const result = await service.getChannel(channel);
+        const channelId = typeof result.id === "string" ? result.id : channel;
+        return payload(
+          "entity",
+          selectChannel(without(result, ["warnings"]), select),
+          [],
+          null,
+          `youtube://entity/channel/${channelId}`,
+          result,
+          { data: 1, search: 0 },
+          ["data.title", "data.description", "data.brandingSettings"],
+          config,
+        );
+      }, config.maxResultBytes),
   );
 
   server.registerTool(
     "youtube_playlist_get",
     {
-      title: "Get a YouTube playlist",
-      description:
-        "Get official playlist metadata and optionally one paginated page of items. Requires YOUTUBE_API_KEY.",
+      description: "Get playlist metadata or one signed page of playlist items.",
       inputSchema: z.object({
-        playlist: z.string().min(1).describe("Playlist ID or URL."),
-        includeItems: z.boolean().default(true),
-        maxResults: z.number().int().min(1).max(50).default(25),
-        pageToken,
+        playlist: z.string().min(1),
+        include_items: z.boolean().default(true),
+        cursor: cursorSchema,
+        limit: limitSchema,
       }),
       annotations: readOnlyAnnotations,
     },
-    async ({ playlist, includeItems, maxResults, pageToken: token }) =>
-      runTool(() =>
-        service.getPlaylist(
-          playlist,
-          maxResults,
-          token,
+    async ({ playlist, include_items: includeItems, cursor, limit }) =>
+      runTool("youtube_playlist_get", async () => {
+        const playlistId = extractPlaylistId(playlist);
+        const cursorFilters = { playlistId, includeItems };
+        if (!includeItems && cursor) {
+          throw new YouTubeMcpError(
+            "INVALID_ARGUMENT",
+            "include_items=false does not use a cursor.",
+          );
+        }
+        const result = await service.getPlaylist(
+          playlistId,
+          Math.min(limit, 50),
+          includeItems
+            ? pageToken(codec, cursor, "youtube_playlist_get", cursorFilters)
+            : undefined,
           includeItems,
-        ),
-      ),
+        );
+        const page = record(result.page);
+        const items = Array.isArray(page.items) ? page.items : [];
+        const next =
+          typeof page.nextPageToken === "string"
+            ? nextCursor(codec, "youtube_playlist_get", cursorFilters, {
+                pageToken: page.nextPageToken,
+              })
+            : null;
+        return payload(
+          includeItems ? "collection" : "entity",
+          includeItems
+            ? {
+                playlist: result.playlist ?? null,
+                page: without(page, ["items", "nextPageToken", "prevPageToken"]),
+              }
+            : result.playlist ?? null,
+          items,
+          next,
+          `youtube://entity/playlist/${playlistId}`,
+          record(result.playlist),
+          { data: includeItems ? 2 : 1, search: 0 },
+          ["data.playlist.title", "data.playlist.description", "items[].title", "items[].description"],
+          config,
+        );
+      }, config.maxResultBytes),
   );
 
-  server.registerTool(
-    "youtube_comments_get",
+  server.registerResource(
+    "catalog",
+    new ResourceTemplate("youtube://catalog", { list: undefined }),
     {
-      title: "Get YouTube comment threads",
-      description:
-        "Get one paginated page of public comment threads with plain text and optional embedded replies. Requires YOUTUBE_API_KEY; large-scale corpus collection is a later milestone.",
-      inputSchema: z.object({
-        video: z.string().min(1).describe("YouTube video ID or URL."),
-        maxResults: z.number().int().min(1).max(100).default(50),
-        pageToken,
-        order: z.enum(["relevance", "time"]).default("relevance"),
-        includeReplies: z.boolean().default(true),
-      }),
-      annotations: readOnlyAnnotations,
+      description: "Capabilities, limits, provider state, and quota status.",
+      mimeType: "application/json",
     },
-    async ({ video, maxResults, pageToken: token, order, includeReplies }) =>
-      runTool(() =>
-        service.listComments(
-          video,
-          maxResults,
-          token,
-          order,
-          includeReplies,
-        ),
-      ),
+    async (uri) => jsonResource(uri, await service.catalog(options.runtime)),
   );
 
-  server.registerTool(
-    "youtube_trending",
+  server.registerResource(
+    "schema",
+    new ResourceTemplate("youtube://schema/{operation}", { list: undefined }),
     {
-      title: "Get YouTube most-popular videos",
-      description:
-        "Get the official videos.list mostPopular chart for a region and optional category. Requires YOUTUBE_API_KEY.",
-      inputSchema: z.object({
-        regionCode: z
-          .string()
-          .length(2)
-          .optional()
-          .describe("ISO 3166-1 alpha-2 country code; defaults to server config."),
-        categoryId: z.string().min(1).optional(),
-        maxResults: z.number().int().min(1).max(50).default(25),
-        pageToken,
-      }),
-      annotations: readOnlyAnnotations,
+      description: "Compact input or error schema by operation name.",
+      mimeType: "application/json",
     },
-    async ({ regionCode, categoryId, maxResults, pageToken: token }) =>
-      runTool(() =>
-        service.trending(regionCode, categoryId, maxResults, token),
-      ),
+    async (uri, variables) => {
+      const operation = templateVariable(variables, "operation");
+      const schema = TOOL_SCHEMAS[operation];
+      if (!schema) throw new ResourceNotFoundError(uri.href);
+      return jsonResource(uri, {
+        schema_version: "1",
+        operation,
+        schema,
+      });
+    },
   );
 
-  server.registerTool(
-    "youtube_quota_status",
+  server.registerResource(
+    "entity",
+    new ResourceTemplate("youtube://entity/{kind}/{id}", { list: undefined }),
     {
-      title: "Inspect local YouTube API quota guards",
-      description:
-        "Show this process's ordinary Data API and search.list usage estimates and configured daily guards. This cannot see calls made by other applications sharing the same Google project.",
-      inputSchema: z.object({}),
-      annotations: readOnlyAnnotations,
+      description: "Canonical video, channel, or playlist metadata.",
+      mimeType: "application/json",
     },
-    async () => runTool(() => service.quotaStatus()),
+    async (uri, variables) => {
+      const kind = templateVariable(variables, "kind");
+      const id = templateVariable(variables, "id");
+      let entity: Record<string, unknown>;
+      if (kind === "video") entity = await service.getVideo(id);
+      else if (kind === "channel") entity = await service.getChannel(id);
+      else if (kind === "playlist") {
+        const result = await service.getPlaylist(id, 1, undefined, false);
+        entity = record(result.playlist);
+      } else {
+        throw new ResourceNotFoundError(uri.href);
+      }
+      return jsonResource(uri, entity);
+    },
   );
 
   return server;

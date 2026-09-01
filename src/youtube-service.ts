@@ -1,4 +1,4 @@
-import { TtlCache } from "./cache/ttl-cache.js";
+import { TtlCache, type AsyncCache } from "./cache/ttl-cache.js";
 import { YouTubeMcpError, errorMessage } from "./errors.js";
 import { SERVER_NAME, SERVER_VERSION } from "./meta.js";
 import { OEmbedClient } from "./providers/oembed-client.js";
@@ -10,7 +10,7 @@ import {
   YouTubeDataApiClient,
   type SearchVideosOptions,
 } from "./providers/youtube-data-api.js";
-import { QuotaLedger } from "./quota/quota-ledger.js";
+import { createQuotaStore, type QuotaStore } from "./quota/quota-store.js";
 import type {
   AppConfig,
   TranscriptDocument,
@@ -26,6 +26,9 @@ import {
   renderTranscriptText,
   searchTranscriptSegments,
 } from "./utils/transcript.js";
+
+const VIDEO_CACHE_CAPACITY = 256;
+const TRANSCRIPT_CACHE_CAPACITY = 32;
 
 export interface TranscriptPageOptions {
   language: string | undefined;
@@ -50,39 +53,33 @@ export interface ServiceRuntimeInfo {
   transport: "stdio" | "streamable-http";
   endpoint: string | undefined;
   authentication: "local-process" | "static-bearer" | "none";
-  googleOAuth: {
-    enabled: boolean;
-    redirectUri: string | undefined;
-    scopes: string[];
-    refreshTokenConfigured: boolean;
-  };
+}
+
+export interface YouTubeServiceDependencies {
+  quota?: QuotaStore;
+  videoCache?: AsyncCache<Record<string, unknown>>;
+  transcriptCache?: AsyncCache<TranscriptDocument>;
 }
 
 const DEFAULT_RUNTIME_INFO: ServiceRuntimeInfo = {
   transport: "stdio",
   endpoint: undefined,
   authentication: "local-process",
-  googleOAuth: {
-    enabled: false,
-    redirectUri: undefined,
-    scopes: [],
-    refreshTokenConfigured: false,
-  },
 };
 
 export class YouTubeService {
-  private readonly quota: QuotaLedger;
+  private readonly quota: QuotaStore;
   private readonly dataApi: YouTubeDataApiClient | undefined;
   private readonly oEmbed: OEmbedClient;
   private readonly transcriptChain: TranscriptProviderChain;
-  private readonly videoCache: TtlCache<Record<string, unknown>>;
-  private readonly transcriptCache: TtlCache<TranscriptDocument>;
+  private readonly videoCache: AsyncCache<Record<string, unknown>>;
+  private readonly transcriptCache: AsyncCache<TranscriptDocument>;
 
-  constructor(readonly config: AppConfig) {
-    this.quota = new QuotaLedger(
-      config.apiDailyBudget,
-      config.searchDailyBudget,
-    );
+  constructor(
+    readonly config: AppConfig,
+    dependencies: YouTubeServiceDependencies = {},
+  ) {
+    this.quota = dependencies.quota ?? createQuotaStore(config);
     this.dataApi =
       config.apiKey && config.providerMode !== "unofficial"
         ? new YouTubeDataApiClient(
@@ -109,8 +106,12 @@ export class YouTubeService {
       },
     );
     this.transcriptChain = new TranscriptProviderChain(transcriptProviders);
-    this.videoCache = new TtlCache(config.cacheTtlMs);
-    this.transcriptCache = new TtlCache(config.cacheTtlMs);
+    this.videoCache =
+      dependencies.videoCache ??
+      new TtlCache(config.cacheTtlMs, VIDEO_CACHE_CAPACITY);
+    this.transcriptCache =
+      dependencies.transcriptCache ??
+      new TtlCache(config.cacheTtlMs, TRANSCRIPT_CACHE_CAPACITY);
   }
 
   private requireDataApi(): YouTubeDataApiClient {
@@ -118,15 +119,19 @@ export class YouTubeService {
     throw new YouTubeMcpError(
       "YOUTUBE_API_KEY_REQUIRED",
       this.config.providerMode === "unofficial"
-        ? "This tool is disabled in unofficial mode. Switch YOUTUBE_PROVIDER_MODE to hybrid or official and provide YOUTUBE_API_KEY."
-        : "This tool requires YOUTUBE_API_KEY. Transcript and limited video metadata remain available without it.",
+        ? "This operation is unavailable in unofficial mode."
+        : "This operation requires YOUTUBE_API_KEY.",
+      { providerMode: this.config.providerMode },
     );
   }
 
-  async capabilities(
+  async catalog(
     runtime: ServiceRuntimeInfo = DEFAULT_RUNTIME_INFO,
   ): Promise<Record<string, unknown>> {
-    const transcriptAvailability = await this.transcriptChain.availability();
+    const [transcriptAvailability, quota] = await Promise.all([
+      this.transcriptChain.availability(),
+      this.quota.status(),
+    ]);
     return {
       server: {
         name: SERVER_NAME,
@@ -136,50 +141,41 @@ export class YouTubeService {
         authentication: runtime.authentication,
         readOnly: true,
       },
-      googleOAuth: {
-        purpose: "Optional upstream authorization for future owned-channel and Analytics tools; it does not authenticate MCP clients.",
-        enabled: runtime.googleOAuth.enabled,
-        redirectUri: runtime.googleOAuth.redirectUri ?? null,
-        scopes: runtime.googleOAuth.scopes,
-        refreshTokenConfigured: runtime.googleOAuth.refreshTokenConfigured,
+      tools: [
+        "youtube_video_get",
+        "youtube_search",
+        "youtube_channel_get",
+        "youtube_playlist_get",
+      ],
+      views: {
+        youtube_video_get: ["metadata", "transcript", "comments"],
+        youtube_search: ["global", "channel", "transcript", "trending"],
       },
-      mode: this.config.providerMode,
-      officialDataApi: {
-        enabled: Boolean(this.dataApi),
-        apiKeyConfigured: Boolean(this.config.apiKey),
-        availableTools: this.dataApi
+      providers: {
+        mode: this.config.providerMode,
+        officialDataApi: Boolean(this.dataApi),
+        transcriptOrder: this.transcriptChain.names,
+        transcriptAvailability,
+        defaultLanguage: this.config.defaultLanguage,
+        defaultRegion: this.config.defaultRegion,
+      },
+      limits: {
+        maxResultBytes: this.config.maxResultBytes,
+        cursorTtlSeconds: Math.floor(this.config.cursorTtlMs / 1_000),
+        videoCacheEntries: VIDEO_CACHE_CAPACITY,
+        transcriptCacheEntries: TRANSCRIPT_CACHE_CAPACITY,
+        cursorSecretSource: this.config.cursorSecretSource,
+      },
+      quota: {
+        store: this.config.quotaStoreMode,
+        ...quota,
+      },
+      warnings:
+        this.config.cursorSecretSource === "ephemeral"
           ? [
-              "youtube_search",
-              "youtube_channel_get",
-              "youtube_channel_videos",
-              "youtube_playlist_get",
-              "youtube_comments_get",
-              "youtube_trending",
+              "Cursor signatures are process-local; set YOUTUBE_CURSOR_SECRET for restart and multi-instance continuity.",
             ]
           : [],
-      },
-      noKeyTools: [
-        "youtube_capabilities",
-        "youtube_video_get (limited oEmbed metadata)",
-        "youtube_transcript_get (when an unofficial provider succeeds)",
-        "youtube_transcript_search (when an unofficial provider succeeds)",
-        "youtube_quota_status",
-      ],
-      transcript: {
-        configuredOrder: this.transcriptChain.names,
-        availability: transcriptAvailability,
-        defaultLanguage: this.config.defaultLanguage,
-        caveat:
-          "Public transcripts require unofficial YouTube interfaces unless OAuth access to an owned video's captions is added later.",
-      },
-      safeguards: {
-        writeToolsEnabled: this.config.enableWriteTools,
-        writeToolsImplemented: false,
-        localQuotaGuard: true,
-        paginatedTranscriptResponses: true,
-        apiDataCacheTtlSeconds: Math.floor(this.config.cacheTtlMs / 1_000),
-      },
-      quota: this.quota.status(),
     };
   }
 
@@ -196,7 +192,7 @@ export class YouTubeService {
         return {
           ...fallback,
           warnings: [
-            `Official Data API lookup failed, so limited oEmbed metadata was returned: ${errorMessage(error)}`,
+            `Official lookup failed; limited oEmbed metadata returned: ${errorMessage(error)}`,
           ],
         };
       }
@@ -223,10 +219,7 @@ export class YouTubeService {
     reference: string,
     options: TranscriptPageOptions,
   ): Promise<TranscriptPage> {
-    const document = await this.getTranscriptDocument(
-      reference,
-      options.language,
-    );
+    const document = await this.getTranscriptDocument(reference, options.language);
     const offset = Math.min(options.offset, document.segments.length);
     const segments = document.segments.slice(offset, offset + options.limit);
     const nextOffset =
@@ -258,10 +251,7 @@ export class YouTubeService {
     query: string,
     options: TranscriptSearchServiceOptions,
   ): Promise<Record<string, unknown>> {
-    const document = await this.getTranscriptDocument(
-      reference,
-      options.language,
-    );
+    const document = await this.getTranscriptDocument(reference, options.language);
     const fromSeconds = parseTimeInput(options.from);
     const toSeconds = parseTimeInput(options.to);
     if (
@@ -271,7 +261,7 @@ export class YouTubeService {
     ) {
       throw new YouTubeMcpError(
         "INVALID_TIME_RANGE",
-        "The transcript search start time must not be after the end time.",
+        "The transcript search start must not be after its end.",
         { fromSeconds, toSeconds },
       );
     }
@@ -307,9 +297,7 @@ export class YouTubeService {
   }
 
   getChannel(reference: string): Promise<Record<string, unknown>> {
-    return this.requireDataApi().getChannel(
-      extractChannelReference(reference),
-    );
+    return this.requireDataApi().getChannel(extractChannelReference(reference));
   }
 
   listChannelVideos(
@@ -366,15 +354,5 @@ export class YouTubeService {
       maxResults,
       pageToken,
     );
-  }
-
-  quotaStatus(): Record<string, unknown> {
-    return {
-      ...this.quota.status(),
-      model:
-        "Local guard for the current YouTube quota model: ordinary Data API operations and search.list calls are tracked in separate configured budgets.",
-      caveat:
-        "This process-local ledger cannot observe calls made by other apps sharing the same Google project.",
-    };
   }
 }

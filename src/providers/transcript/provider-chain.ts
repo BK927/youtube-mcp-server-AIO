@@ -29,7 +29,7 @@ export class TranscriptProviderChain {
     if (this.providers.length === 0) {
       throw new YouTubeMcpError(
         "TRANSCRIPT_PROVIDERS_DISABLED",
-        "No transcript provider is enabled. Use hybrid or unofficial mode, or add a future official-caption OAuth provider.",
+        "No transcript provider is enabled. Use hybrid or unofficial mode and configure a transcript provider.",
       );
     }
 

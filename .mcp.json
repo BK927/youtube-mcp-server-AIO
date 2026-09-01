@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "youtube-mcp-aio": {
+      "type": "http",
+      "url": "https://youtube-mcp-aio-f6wkf5w2hq-an.a.run.app/mcp",
+      "bearer_token_env_var": "YOUTUBE_MCP_ACCESS_TOKEN"
+    }
+  }
+}

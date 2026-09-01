@@ -1,5 +1,5 @@
 import { YouTubeMcpError, errorMessage } from "../errors.js";
-import { QuotaLedger, type QuotaBucket } from "../quota/quota-ledger.js";
+import type { QuotaBucket, QuotaStore } from "../quota/quota-store.js";
 import type { ChannelReference } from "../utils/ids.js";
 import {
   channelUrl,
@@ -268,7 +268,7 @@ export class YouTubeDataApiClient {
   constructor(
     private readonly apiKey: string,
     private readonly timeoutMs: number,
-    private readonly quota: QuotaLedger,
+    private readonly quota: QuotaStore,
   ) {}
 
   private async request<T>(
@@ -286,7 +286,7 @@ export class YouTubeDataApiClient {
 
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      this.quota.consume(bucket, 1, resource);
+      await this.quota.consume(bucket, 1, resource);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {

@@ -1,0 +1,10 @@
+{"id":"youtube-direct-01","prompt":"이 YouTube 영상의 핵심을 타임스탬프 근거와 함께 요약해줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-02","prompt":"YouTube에서 MCP 튜토리얼 영상을 검색해줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-03","prompt":"이 YouTube 채널의 프로필과 업로드 재생목록을 확인해줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-04","prompt":"YouTube 재생목록의 첫 20개 영상을 정리해줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-05","prompt":"이 YouTube 영상 댓글을 최신순으로 조사해줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-06","prompt":"YouTube 자막에서 'Cloud Run'이 언급된 부분을 찾아줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-07","prompt":"한국 YouTube 인기 동영상 목록을 가져와줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-08","prompt":"YouTube 영상 ID dQw4w9WgXcQ의 메타데이터를 확인해줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-09","prompt":"이 YouTube 채널 안에서 Firestore 관련 영상을 찾아줘.","expected_plugin":"youtube-mcp-aio"}
+{"id":"youtube-direct-10","prompt":"두 YouTube 영상의 자막 근거를 각각 수집해줘.","expected_plugin":"youtube-mcp-aio"}

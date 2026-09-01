@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  googleOAuthRedirectUri,
-  loadRuntimeConfig,
-} from "../src/runtime-config.js";
+import { loadConfig } from "../src/config.js";
+import { loadRuntimeConfig } from "../src/runtime-config.js";
 
 const LONG_TOKEN = "a".repeat(64);
 
-function clearRuntimeEnvironment(): void {
-  const names = [
+function clearEnvironment(): void {
+  for (const name of [
     "K_SERVICE",
     "MCP_TRANSPORT",
     "MCP_ACCESS_TOKEN",
@@ -15,70 +13,50 @@ function clearRuntimeEnvironment(): void {
     "PUBLIC_BASE_URL",
     "MCP_ALLOWED_ORIGINS",
     "MCP_ALLOWED_HOSTS",
-    "GOOGLE_OAUTH_ENABLED",
-    "GOOGLE_OAUTH_CLIENT_ID",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "GOOGLE_OAUTH_STATE_SECRET",
-    "GOOGLE_OAUTH_SETUP_TOKEN",
-    "GOOGLE_OAUTH_REFRESH_TOKEN",
-  ];
-  for (const name of names) vi.stubEnv(name, "");
+    "YOUTUBE_CURSOR_SECRET",
+    "YOUTUBE_CURSOR_TTL_SECONDS",
+    "YOUTUBE_MAX_RESULT_BYTES",
+    "YOUTUBE_QUOTA_STORE",
+    "GOOGLE_CLOUD_PROJECT",
+  ]) {
+    vi.stubEnv(name, "");
+  }
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 describe("runtime config", () => {
-  it("keeps stdio as the safe local default", () => {
-    clearRuntimeEnvironment();
-    const config = loadRuntimeConfig(["--stdio"]);
-    expect(config.transport).toBe("stdio");
-    expect(config.http.accessToken).toBeUndefined();
+  it("keeps stdio local and uses bounded context defaults", () => {
+    clearEnvironment();
+    expect(loadRuntimeConfig(["--stdio"]).transport).toBe("stdio");
+    const config = loadConfig();
+    expect(config.cursorTtlMs).toBe(86_400_000);
+    expect(config.maxResultBytes).toBe(12_288);
+    expect(config.cursorSecretSource).toBe("ephemeral");
   });
 
-  it("refuses an accidentally public HTTP server", () => {
-    clearRuntimeEnvironment();
+  it("refuses public HTTP and response caps above 32 KiB", () => {
+    clearEnvironment();
     expect(() => loadRuntimeConfig(["--http"])).toThrow(/MCP_ACCESS_TOKEN/u);
+    vi.stubEnv("YOUTUBE_MAX_RESULT_BYTES", "32769");
+    expect(() => loadConfig()).toThrow(/must not exceed 32768/u);
   });
 
-  it("normalizes a Cloud Run base URL and derives host/origin guards", () => {
-    clearRuntimeEnvironment();
+  it("derives persistent cursor signing and Cloud guards from MCP settings", () => {
+    clearEnvironment();
     vi.stubEnv("MCP_ACCESS_TOKEN", LONG_TOKEN);
     vi.stubEnv("PUBLIC_BASE_URL", "https://youtube-aio.example.run.app/");
-
-    const config = loadRuntimeConfig(["--http"]);
-    expect(config.http.publicBaseUrl).toBe(
+    vi.stubEnv("YOUTUBE_QUOTA_STORE", "firestore");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "test-project");
+    const runtime = loadRuntimeConfig(["--http"]);
+    expect(runtime.http.publicBaseUrl).toBe("https://youtube-aio.example.run.app");
+    expect(runtime.http.allowedOrigins).toContain(
       "https://youtube-aio.example.run.app",
     );
-    expect(config.http.allowedOrigins).toContain(
-      "https://youtube-aio.example.run.app",
-    );
-    expect(config.http.allowedHosts).toContain(
-      "youtube-aio.example.run.app",
-    );
-  });
-
-  it("requires complete Google OAuth configuration when enabled", () => {
-    clearRuntimeEnvironment();
-    vi.stubEnv("MCP_ACCESS_TOKEN", LONG_TOKEN);
-    vi.stubEnv("GOOGLE_OAUTH_ENABLED", "true");
-    expect(() => loadRuntimeConfig(["--http"])).toThrow(/PUBLIC_BASE_URL/u);
-  });
-
-  it("produces the exact configured Google redirect URI", () => {
-    clearRuntimeEnvironment();
-    vi.stubEnv("MCP_ACCESS_TOKEN", LONG_TOKEN);
-    vi.stubEnv("PUBLIC_BASE_URL", "https://youtube-aio.example.run.app");
-    vi.stubEnv("GOOGLE_OAUTH_ENABLED", "true");
-    vi.stubEnv("GOOGLE_OAUTH_CLIENT_ID", "client.apps.googleusercontent.com");
-    vi.stubEnv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret");
-    vi.stubEnv("GOOGLE_OAUTH_STATE_SECRET", "s".repeat(64));
-    vi.stubEnv("GOOGLE_OAUTH_SETUP_TOKEN", "t".repeat(64));
-
-    const config = loadRuntimeConfig(["--http"]);
-    expect(googleOAuthRedirectUri(config)).toBe(
-      "https://youtube-aio.example.run.app/oauth/google/callback",
-    );
+    expect(runtime.http.allowedHosts).toContain("youtube-aio.example.run.app");
+    const app = loadConfig();
+    expect(app.cursorSecretSource).toBe("mcp-access-token");
+    expect(app.quotaStoreMode).toBe("firestore");
+    expect(app.firestoreProjectId).toBe("test-project");
   });
 });
