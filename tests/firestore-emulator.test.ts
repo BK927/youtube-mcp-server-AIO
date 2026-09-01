@@ -28,5 +28,5 @@ describe.skipIf(!emulatorEnabled)("Firestore emulator quota transaction", () => 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(5);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(5);
     expect((await store.status()).data.used).toBe(5);
-  });
+  }, 30_000);
 });
