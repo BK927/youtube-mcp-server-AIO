@@ -14,6 +14,7 @@ import { createYoutubeMcpServer } from "../server.js";
 import type { AppConfig } from "../types.js";
 import { YouTubeService, type ServiceRuntimeInfo } from "../youtube-service.js";
 import { authenticateMcpRequest, sendUnauthorized } from "./auth.js";
+import { PersonalOAuthServer } from "./oauth.js";
 import {
   HttpError,
   readRequestBody,
@@ -54,7 +55,11 @@ function createRuntimeInfo(runtime: RuntimeConfig): ServiceRuntimeInfo {
   return {
     transport: "streamable-http",
     endpoint: publicEndpoint(runtime, runtime.http.mcpPath),
-    authentication: runtime.http.accessToken ? "static-bearer" : "none",
+    authentication: runtime.http.oauth
+      ? "oauth2+static-bearer"
+      : runtime.http.accessToken
+        ? "static-bearer"
+        : "none",
   };
 }
 
@@ -68,9 +73,11 @@ function rootDocument(runtime: RuntimeConfig): Record<string, unknown> {
       health:
         publicEndpoint(runtime, runtime.http.healthPath) ?? runtime.http.healthPath,
     },
-    mcpAuthentication: runtime.http.accessToken
-      ? "Authorization: Bearer <MCP_ACCESS_TOKEN>"
-      : "none",
+    mcpAuthentication: runtime.http.oauth
+      ? "OAuth 2.1 (static bearer remains supported)"
+      : runtime.http.accessToken
+        ? "Authorization: Bearer <MCP_ACCESS_TOKEN>"
+        : "none",
   };
 }
 
@@ -87,6 +94,7 @@ async function handleMcpRoute(
   response: ServerResponse,
   runtime: RuntimeConfig,
   nodeMcpHandler: ReturnType<typeof toNodeHandler>,
+  oauth: PersonalOAuthServer | undefined,
 ): Promise<void> {
   if (!isHostAllowed(request, runtime.http.allowedHosts)) {
     sendForbidden(response, "The request Host is not allowed.");
@@ -105,9 +113,10 @@ async function handleMcpRoute(
     request,
     runtime.http.accessToken,
     runtime.http.allowUnauthenticated,
+    oauth,
   );
   if (!authentication.ok) {
-    sendUnauthorized(response);
+    sendUnauthorized(response, oauth);
     return;
   }
   if (authentication.authInfo) request.auth = authentication.authInfo;
@@ -155,6 +164,9 @@ export async function startHttpServer(
   runtime: RuntimeConfig,
 ): Promise<HttpServerHandle> {
   const service = new YouTubeService(appConfig);
+  const oauth = runtime.http.oauth
+    ? new PersonalOAuthServer(runtime.http.oauth)
+    : undefined;
   const serviceRuntime = createRuntimeInfo(runtime);
   const mcpHandler = createMcpHandler(
     () =>
@@ -192,6 +204,14 @@ export async function startHttpServer(
       const url = new URL(request.url || "/", "http://localhost");
       const path = normalizedRequestPath(url.pathname);
 
+      if (oauth) {
+        if (!isHostAllowed(request, runtime.http.allowedHosts)) {
+          sendForbidden(response, "The request Host is not allowed.");
+          return;
+        }
+        if (await oauth.handle(request, response, path, url)) return;
+      }
+
       if (path === runtime.http.healthPath) {
         if (request.method !== "GET") {
           sendMethodNotAllowed(response, ["GET"]);
@@ -221,6 +241,7 @@ export async function startHttpServer(
           response,
           runtime,
           nodeMcpHandler,
+          oauth,
         );
         return;
       }

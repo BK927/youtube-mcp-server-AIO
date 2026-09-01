@@ -7,6 +7,7 @@ param(
   [string]$RepositoryName = "mcp",
   [string]$ImageName = "youtube-mcp-aio",
   [string]$RuntimeServiceAccountName = "youtube-mcp-runner",
+  [string]$OAuthCodeCollection = "youtube_oauth_codes",
   [string]$SmokeVideoId = "dQw4w9WgXcQ",
   [string]$TokenEnvironmentVariable = "YOUTUBE_MCP_ACCESS_TOKEN",
   [switch]$RotateAccessToken,
@@ -97,6 +98,7 @@ function New-GcloudEnvironmentFile {
 
 function Deploy-Candidate {
   param([string]$RevisionSuffix, [string]$PublicBaseUrl, [string]$AllowedHosts, [bool]$NoTraffic)
+  $oauthEnabled = if ([string]::IsNullOrWhiteSpace($PublicBaseUrl)) { "false" } else { "true" }
   $environmentFile = New-GcloudEnvironmentFile ([ordered]@{
     MCP_TRANSPORT = "http"
     HOST = "0.0.0.0"
@@ -107,12 +109,18 @@ function Deploy-Candidate {
     MCP_ALLOW_UNAUTHENTICATED = "false"
     PUBLIC_BASE_URL = $PublicBaseUrl
     MCP_ALLOWED_HOSTS = $AllowedHosts
+    MCP_OAUTH_ENABLED = $oauthEnabled
+    MCP_OAUTH_ISSUER = $PublicBaseUrl
+    MCP_OAUTH_RESOURCE = "$PublicBaseUrl/mcp"
+    MCP_OAUTH_SCOPE = "youtube.read"
+    MCP_OAUTH_STORE = "firestore"
+    MCP_OAUTH_CODE_COLLECTION = $OAuthCodeCollection
     YOUTUBE_QUOTA_STORE = "firestore"
     GOOGLE_CLOUD_PROJECT = $ProjectId
     YOUTUBE_CURSOR_TTL_SECONDS = "86400"
     YOUTUBE_MAX_RESULT_BYTES = "12288"
   })
-  $secretValues = "MCP_ACCESS_TOKEN=youtube-mcp-access-token:$accessVersion,YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion,YOUTUBE_API_KEY=youtube-data-api-key:$apiKeyVersion"
+  $secretValues = "MCP_ACCESS_TOKEN=youtube-mcp-access-token:$accessVersion,MCP_OAUTH_LOGIN_SECRET=youtube-mcp-oauth-login-secret:$oauthLoginVersion,MCP_OAUTH_SIGNING_SECRET=youtube-mcp-oauth-signing-secret:$oauthSigningVersion,YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion,YOUTUBE_API_KEY=youtube-data-api-key:$apiKeyVersion"
   $arguments = @(
     "run", "deploy", $ServiceName, "--project", $ProjectId, "--region", $Region,
     "--image", $immutableImage, "--allow-unauthenticated", "--ingress", "all",
@@ -167,6 +175,8 @@ if ($RotateAccessToken) { Add-SecretVersion "youtube-mcp-access-token" (New-Rand
 $accessVersion = Get-LatestSecretVersion "youtube-mcp-access-token"
 $cursorSecretVersion = Get-LatestSecretVersion "youtube-mcp-cursor-secret"
 $apiKeyVersion = Get-LatestSecretVersion "youtube-data-api-key"
+$oauthLoginVersion = Get-LatestSecretVersion "youtube-mcp-oauth-login-secret"
+$oauthSigningVersion = Get-LatestSecretVersion "youtube-mcp-oauth-signing-secret"
 
 Write-Host "[1/6] Building immutable image $taggedImage..." -ForegroundColor Cyan
 Push-Location $projectRoot
@@ -211,6 +221,12 @@ Write-Host "[4/6] Smoking /health, bearer enforcement, and the four-tool contrac
 $health = Invoke-RestMethod -Uri "$candidateUrl/health" -Method Get
 if (-not $health.ok) { throw "Candidate health response did not report ok=true." }
 Test-HttpStatus "$candidateUrl/mcp" 401
+$oauthMetadata = Invoke-RestMethod -Uri "$candidateUrl/.well-known/oauth-authorization-server" -Method Get
+if ($oauthMetadata.issuer -ne $serviceUrl -or -not $oauthMetadata.client_id_metadata_document_supported) {
+  throw "Candidate OAuth authorization metadata is invalid."
+}
+$resourceMetadata = Invoke-RestMethod -Uri "$candidateUrl/.well-known/oauth-protected-resource/mcp" -Method Get
+if ($resourceMetadata.resource -ne "$serviceUrl/mcp") { throw "Candidate OAuth resource metadata is invalid." }
 $accessToken = (@(& gcloud secrets versions access $accessVersion --secret youtube-mcp-access-token --project $ProjectId) -join "").Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) { throw "Could not read the pinned bearer secret version." }
 $priorSmokeToken = $env:MCP_SMOKE_ACCESS_TOKEN
@@ -248,3 +264,4 @@ Write-Host "Candidate:  $candidateUrl/mcp"
 Write-Host "Production: $serviceUrl/mcp"
 Write-Host "Health:     $serviceUrl/health"
 Write-Host "Secrets:    youtube-mcp-access-token:$accessVersion, youtube-mcp-cursor-secret:$cursorSecretVersion, youtube-data-api-key:$apiKeyVersion"
+Write-Host "OAuth:      youtube-mcp-oauth-login-secret:$oauthLoginVersion, youtube-mcp-oauth-signing-secret:$oauthSigningVersion"

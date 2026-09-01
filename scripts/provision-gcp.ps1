@@ -6,6 +6,7 @@ param(
   [string]$Region = "asia-northeast1",
   [string]$RepositoryName = "mcp",
   [string]$RuntimeServiceAccountName = "youtube-mcp-runner",
+  [string]$OAuthCodeCollection = "youtube_oauth_codes",
   [string]$ApiKeyId = "youtube-mcp-aio-v3"
 )
 
@@ -149,6 +150,14 @@ Ensure-Secret "youtube-mcp-cursor-secret"
 if (-not (Get-LatestSecretVersion "youtube-mcp-cursor-secret")) {
   Add-SecretVersion "youtube-mcp-cursor-secret" (New-RandomHex 32)
 }
+Ensure-Secret "youtube-mcp-oauth-login-secret"
+if (-not (Get-LatestSecretVersion "youtube-mcp-oauth-login-secret")) {
+  Add-SecretVersion "youtube-mcp-oauth-login-secret" (New-RandomHex 32)
+}
+Ensure-Secret "youtube-mcp-oauth-signing-secret"
+if (-not (Get-LatestSecretVersion "youtube-mcp-oauth-signing-secret")) {
+  Add-SecretVersion "youtube-mcp-oauth-signing-secret" (New-RandomHex 32)
+}
 
 Ensure-Secret "youtube-data-api-key"
 if (-not (Test-GcloudResource services api-keys describe $ApiKeyId --project $ProjectId)) {
@@ -171,6 +180,8 @@ if (-not (Get-LatestSecretVersion "youtube-data-api-key")) {
 }
 Grant-SecretRole "youtube-mcp-access-token" $runtimeServiceAccount
 Grant-SecretRole "youtube-mcp-cursor-secret" $runtimeServiceAccount
+Grant-SecretRole "youtube-mcp-oauth-login-secret" $runtimeServiceAccount
+Grant-SecretRole "youtube-mcp-oauth-signing-secret" $runtimeServiceAccount
 Grant-SecretRole "youtube-data-api-key" $runtimeServiceAccount
 
 Write-Host "[5/6] Creating Firestore Native quota storage..." -ForegroundColor Cyan
@@ -191,6 +202,12 @@ if ($LASTEXITCODE -ne 0 -or $firestoreLocation -ne $Region) {
   throw "Firestore (default) must be in '$Region'; current location is '$firestoreLocation'."
 }
 Grant-ProjectRole "serviceAccount:$runtimeServiceAccount" roles/datastore.user
+Invoke-Gcloud firestore fields ttls update delete_at `
+  --collection-group $OAuthCodeCollection `
+  --database "(default)" `
+  --enable-ttl `
+  --project $ProjectId `
+  --quiet
 
 Write-Host "[6/6] Provisioning complete." -ForegroundColor Green
 Write-Host "Region:            $Region"
@@ -199,3 +216,4 @@ Write-Host "Runtime identity:  $runtimeServiceAccount"
 Write-Host "Quota store:       Firestore Native / youtube_quota"
 Write-Host "API key:           restricted to youtube.googleapis.com"
 Write-Host "Bearer token:      initialized only if absent; rotate only during deploy with -RotateAccessToken"
+Write-Host "ChatGPT OAuth:      personal login/signing secrets initialized only if absent"

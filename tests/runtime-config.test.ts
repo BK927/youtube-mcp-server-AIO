@@ -18,6 +18,14 @@ function clearEnvironment(): void {
     "YOUTUBE_MAX_RESULT_BYTES",
     "YOUTUBE_QUOTA_STORE",
     "GOOGLE_CLOUD_PROJECT",
+    "MCP_OAUTH_ENABLED",
+    "MCP_OAUTH_ISSUER",
+    "MCP_OAUTH_RESOURCE",
+    "MCP_OAUTH_SCOPE",
+    "MCP_OAUTH_LOGIN_SECRET",
+    "MCP_OAUTH_SIGNING_SECRET",
+    "MCP_OAUTH_STORE",
+    "MCP_OAUTH_CODE_COLLECTION",
   ]) {
     vi.stubEnv(name, "");
   }
@@ -33,6 +41,21 @@ describe("runtime config", () => {
     expect(config.cursorTtlMs).toBe(86_400_000);
     expect(config.maxResultBytes).toBe(12_288);
     expect(config.cursorSecretSource).toBe("ephemeral");
+  });
+
+  it("requires strong secrets and derives the hosted OAuth identifiers", () => {
+    clearEnvironment();
+    vi.stubEnv("MCP_OAUTH_ENABLED", "true");
+    vi.stubEnv("PUBLIC_BASE_URL", "https://youtube.example.run.app");
+    vi.stubEnv("MCP_OAUTH_LOGIN_SECRET", "l".repeat(32));
+    vi.stubEnv("MCP_OAUTH_SIGNING_SECRET", "s".repeat(32));
+    const runtime = loadRuntimeConfig(["--http"]);
+    expect(runtime.http.oauth).toMatchObject({
+      issuer: "https://youtube.example.run.app",
+      resource: "https://youtube.example.run.app/mcp",
+      scope: "youtube.read",
+      store: "memory",
+    });
   });
 
   it("refuses public HTTP and response caps above 32 KiB", () => {

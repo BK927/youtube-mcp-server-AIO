@@ -12,6 +12,18 @@ export interface HttpRuntimeConfig {
   allowedHosts: string[];
   maxBodyBytes: number;
   requestTimeoutMs: number;
+  oauth?: OAuthRuntimeConfig | undefined;
+}
+
+export interface OAuthRuntimeConfig {
+  issuer: string;
+  resource: string;
+  scope: string;
+  loginSecret: string;
+  signingSecret: string;
+  store: "memory" | "firestore";
+  projectId: string | undefined;
+  codeCollection: string;
 }
 
 export interface RuntimeConfig {
@@ -138,13 +150,42 @@ export function loadRuntimeConfig(
   const publicBaseUrl = readPublicBaseUrl();
   const accessToken = process.env.MCP_ACCESS_TOKEN?.trim() || undefined;
   const allowUnauthenticated = readBoolean("MCP_ALLOW_UNAUTHENTICATED", false);
+  const oauthEnabled = readBoolean("MCP_OAUTH_ENABLED", false);
   if (accessToken && accessToken.length < 32) {
     throw new Error("MCP_ACCESS_TOKEN must be at least 32 characters.");
   }
-  if (transport === "http" && !accessToken && !allowUnauthenticated) {
+  if (transport === "http" && !accessToken && !allowUnauthenticated && !oauthEnabled) {
     throw new Error(
       "HTTP mode requires MCP_ACCESS_TOKEN. Set MCP_ALLOW_UNAUTHENTICATED=true only for an intentionally public server.",
     );
+  }
+  let oauth: OAuthRuntimeConfig | undefined;
+  if (oauthEnabled) {
+    if (!publicBaseUrl) throw new Error("OAuth requires PUBLIC_BASE_URL.");
+    const loginSecret = process.env.MCP_OAUTH_LOGIN_SECRET?.trim() || "";
+    const signingSecret = process.env.MCP_OAUTH_SIGNING_SECRET?.trim() || "";
+    if (loginSecret.length < 32 || signingSecret.length < 32) {
+      throw new Error("OAuth login and signing secrets must be at least 32 characters.");
+    }
+    const store = process.env.MCP_OAUTH_STORE?.trim().toLowerCase() || "memory";
+    if (store !== "memory" && store !== "firestore") {
+      throw new Error("MCP_OAUTH_STORE must be memory or firestore.");
+    }
+    const issuer = process.env.MCP_OAUTH_ISSUER?.trim().replace(/\/+$/u, "") || publicBaseUrl;
+    const mcpPath = normalizePath("MCP_PATH", "/mcp");
+    oauth = {
+      issuer,
+      resource:
+        process.env.MCP_OAUTH_RESOURCE?.trim().replace(/\/+$/u, "") ||
+        `${publicBaseUrl}${mcpPath}`,
+      scope: process.env.MCP_OAUTH_SCOPE?.trim() || "youtube.read",
+      loginSecret,
+      signingSecret,
+      store,
+      projectId: process.env.GOOGLE_CLOUD_PROJECT?.trim() || undefined,
+      codeCollection:
+        process.env.MCP_OAUTH_CODE_COLLECTION?.trim() || "youtube_oauth_codes",
+    };
   }
   return {
     transport,
@@ -170,6 +211,7 @@ export function loadRuntimeConfig(
         1_000,
         3_600_000,
       ),
+      oauth,
     },
   };
 }

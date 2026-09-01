@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthInfo } from "@modelcontextprotocol/server";
+import type { PersonalOAuthServer } from "./oauth.js";
 
 export interface AuthenticationResult {
   ok: boolean;
@@ -35,33 +36,37 @@ export function authenticateMcpRequest(
   request: IncomingMessage,
   accessToken: string | undefined,
   allowUnauthenticated: boolean,
+  oauth?: PersonalOAuthServer,
 ): AuthenticationResult {
-  if (!accessToken) {
+  const supplied = readBearerToken(request.headers.authorization);
+  if (supplied && accessToken && secretsMatch(supplied, accessToken)) {
+    return {
+      ok: true,
+      authInfo: {
+        token: supplied,
+        clientId: "youtube-mcp-aio-static-token",
+        scopes: ["youtube.read"],
+        extra: { authenticationMethod: "static-bearer" },
+      },
+    };
+  }
+  const oauthInfo = supplied ? oauth?.authenticate(supplied) : undefined;
+  if (oauthInfo) return { ok: true, authInfo: oauthInfo };
+
+  if (!accessToken && !oauth) {
     return {
       ok: allowUnauthenticated,
       authInfo: undefined,
     };
   }
 
-  const supplied = readBearerToken(request.headers.authorization);
-  if (!supplied || !secretsMatch(supplied, accessToken)) {
-    return { ok: false, authInfo: undefined };
-  }
-
-  return {
-    ok: true,
-    authInfo: {
-      token: supplied,
-      clientId: "youtube-mcp-aio-static-token",
-      scopes: ["youtube:read"],
-      extra: {
-        authenticationMethod: "static-bearer",
-      },
-    },
-  };
+  return { ok: false, authInfo: undefined };
 }
 
-export function sendUnauthorized(response: ServerResponse): void {
+export function sendUnauthorized(
+  response: ServerResponse,
+  oauth?: PersonalOAuthServer,
+): void {
   const body = JSON.stringify({
     error: "unauthorized",
     message: "A valid Bearer token is required for this MCP endpoint.",
@@ -70,7 +75,9 @@ export function sendUnauthorized(response: ServerResponse): void {
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body).toString(),
-    "WWW-Authenticate": 'Bearer realm="youtube-mcp-aio"',
+    "WWW-Authenticate": oauth
+      ? `Bearer resource_metadata="${oauth.resourceMetadataUrl()}", scope="youtube.read"`
+      : 'Bearer realm="youtube-mcp-aio"',
     "X-Content-Type-Options": "nosniff",
   });
   response.end(body);

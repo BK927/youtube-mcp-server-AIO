@@ -56,14 +56,14 @@ Generic MCP client configuration:
 
 ## Google Cloud Run
 
-The cloud profile is a single public Cloud Run service with bearer-protected `/mcp` and public `/health`. Local HTTP defaults remain on `/healthz`. Firestore makes daily quota guards transactional across requests, restarts, and up to two instances; the MCP transport remains stateless.
+The cloud profile is a single public Cloud Run service with bearer- or OAuth-protected `/mcp` and public `/health`. Local HTTP defaults remain on `/healthz`. Firestore makes daily quota guards and one-time OAuth codes consistent across requests, restarts, and up to two instances; the MCP transport remains stateless.
 
 ```powershell
 pwsh -File .\scripts\provision-gcp.ps1 -ProjectId "YOUR_PROJECT_ID"
 pwsh -File .\scripts\deploy-cloud-run.ps1 -ProjectId "YOUR_PROJECT_ID" -Promote
 ```
 
-Deployment requires a clean Git worktree. It builds a full Git SHA tag, resolves the Artifact Registry digest, creates a tagged zero-traffic candidate, checks `/health`, bearer rejection, and the exact four-tool contract, and promotes only with `-Promote`. Bearer rotation occurs only with `-RotateAccessToken`. See [docs/CLOUD_RUN.md](docs/CLOUD_RUN.md).
+Deployment requires a clean Git worktree. It builds a full Git SHA tag, resolves the Artifact Registry digest, creates a tagged zero-traffic candidate, checks `/health`, OAuth discovery, bearer rejection, and the exact four-tool contract, and promotes only with `-Promote`. ChatGPT uses Authorization Code + PKCE with a private personal access key; Codex can continue using the existing bearer. See [docs/CLOUD_RUN.md](docs/CLOUD_RUN.md).
 
 Cloud plugin configuration lives in `.mcp.json`. `scripts/sync-codex-plugin.ps1` can build local or cloud plugin profiles, but changes the user's plugin installation and is not part of CI or deployment.
 
@@ -93,6 +93,10 @@ Hosts that implement OpenAI [Tool Search](https://developers.openai.com/api/docs
 | `HTTP_MAX_BODY_BYTES` | `2097152` | Maximum request body (2 MiB) |
 | `HTTP_REQUEST_TIMEOUT_MS` | `300000` | Node request timeout aligned with Cloud Run |
 | `MCP_ACCESS_TOKEN` | empty | Required fixed bearer in HTTP mode |
+| `MCP_OAUTH_ENABLED` | `false` | Enable personal ChatGPT OAuth 2.1 endpoints |
+| `MCP_OAUTH_LOGIN_SECRET` | empty | Private key entered only on the hosted authorization page |
+| `MCP_OAUTH_SIGNING_SECRET` | empty | Signs audience-bound access and refresh tokens |
+| `MCP_OAUTH_STORE` | `memory` | Cloud deployment uses Firestore for one-time codes |
 | `PUBLIC_BASE_URL` | empty | Stable HTTPS URL used for Host validation |
 | `MCP_ALLOWED_HOSTS` | empty | Additional exact candidate/stable hosts |
 
@@ -103,7 +107,7 @@ See [.env.example](.env.example) for the complete local template.
 - Browser Origin and Host are exact-allowlisted in HTTP mode.
 - YouTube titles, descriptions, comments, and transcripts are marked as untrusted content.
 - API and bearer secrets are injected by service-specific Secret Manager IAM bindings at numeric versions.
-- The fixed bearer is intended for a private operator plugin, not a shared multi-user authorization server.
+- The existing fixed bearer and personal OAuth 2.1 flow are for one private operator. OAuth accepts only ChatGPT client metadata URLs, requires PKCE S256 and the exact MCP audience, and is not a shared multi-user identity system.
 - The default server does not upload/download media, use browser cookies, modify watch history, or perform account writes.
 
 ## Development

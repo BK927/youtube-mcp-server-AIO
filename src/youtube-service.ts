@@ -52,7 +52,11 @@ export interface TranscriptSearchServiceOptions {
 export interface ServiceRuntimeInfo {
   transport: "stdio" | "streamable-http";
   endpoint: string | undefined;
-  authentication: "local-process" | "static-bearer" | "none";
+  authentication:
+    | "local-process"
+    | "oauth2+static-bearer"
+    | "static-bearer"
+    | "none";
 }
 
 export interface YouTubeServiceDependencies {

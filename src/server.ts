@@ -25,6 +25,9 @@ const readOnlyAnnotations = {
   idempotentHint: true,
   openWorldHint: true,
 };
+const oauthMeta = {
+  securitySchemes: [{ type: "oauth2", scopes: ["youtube.read"] }],
+};
 
 const cursorSchema = z.string().min(1).optional();
 const limitSchema = z.number().int().min(1).max(100).default(10);
@@ -416,6 +419,7 @@ export function createYoutubeMcpServer(
         locale: z.string().default(""),
       }),
       annotations: readOnlyAnnotations,
+      _meta: oauthMeta,
     },
     async ({ video, view, options, cursor, limit, max_chars: maxChars, locale }) =>
       runTool("youtube_video_get", async () => {
@@ -540,6 +544,7 @@ export function createYoutubeMcpServer(
         locale: z.string().default(""),
       }),
       annotations: readOnlyAnnotations,
+      _meta: oauthMeta,
     },
     async ({ scope, query, within, filters, cursor, limit, locale }) =>
       runTool("youtube_search", async () => {
@@ -756,6 +761,7 @@ export function createYoutubeMcpServer(
           .default(["profile", "statistics", "branding", "uploads_playlist"]),
       }),
       annotations: readOnlyAnnotations,
+      _meta: oauthMeta,
     },
     async ({ channel, select }) =>
       runTool("youtube_channel_get", async () => {
@@ -786,6 +792,7 @@ export function createYoutubeMcpServer(
         limit: limitSchema,
       }),
       annotations: readOnlyAnnotations,
+      _meta: oauthMeta,
     },
     async ({ playlist, include_items: includeItems, cursor, limit }) =>
       runTool("youtube_playlist_get", async () => {
