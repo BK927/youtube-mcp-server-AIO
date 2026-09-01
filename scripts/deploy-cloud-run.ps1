@@ -89,7 +89,6 @@ function Deploy-Candidate {
   $environmentFile = New-GcloudEnvironmentFile ([ordered]@{
     MCP_TRANSPORT = "http"
     HOST = "0.0.0.0"
-    PORT = "8080"
     MCP_PATH = "/mcp"
     HEALTH_PATH = "/healthz"
     HTTP_MAX_BODY_BYTES = "2097152"
