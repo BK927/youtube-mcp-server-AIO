@@ -46,8 +46,13 @@ function Get-LatestSecretVersion {
 
 function Add-SecretVersion {
   param([string]$Name, [string]$Value)
-  $Value | & gcloud secrets versions add $Name --project $ProjectId --data-file=- --quiet
-  if ($LASTEXITCODE -ne 0) { throw "Could not rotate '$Name'." }
+  $path = Join-Path ([IO.Path]::GetTempPath()) ("youtube-mcp-secret-{0}" -f [Guid]::NewGuid().ToString("N"))
+  try {
+    [IO.File]::WriteAllText($path, $Value, [Text.UTF8Encoding]::new($false))
+    & gcloud secrets versions add $Name --project $ProjectId --data-file=$path --quiet
+    if ($LASTEXITCODE -ne 0) { throw "Could not rotate '$Name'." }
+  }
+  finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
 }
 
 function Get-ServiceDocument {
@@ -96,7 +101,7 @@ function Deploy-Candidate {
     MCP_TRANSPORT = "http"
     HOST = "0.0.0.0"
     MCP_PATH = "/mcp"
-    HEALTH_PATH = "/healthz"
+    HEALTH_PATH = "/health"
     HTTP_MAX_BODY_BYTES = "2097152"
     HTTP_REQUEST_TIMEOUT_MS = "300000"
     MCP_ALLOW_UNAUTHENTICATED = "false"
@@ -202,11 +207,11 @@ if (-not $candidateUrl -or -not $candidateRevision) {
   throw "The hardened candidate URL/revision could not be resolved."
 }
 
-Write-Host "[4/6] Smoking /healthz, bearer enforcement, and the four-tool contract..." -ForegroundColor Cyan
-$health = Invoke-RestMethod -Uri "$candidateUrl/healthz" -Method Get
+Write-Host "[4/6] Smoking /health, bearer enforcement, and the four-tool contract..." -ForegroundColor Cyan
+$health = Invoke-RestMethod -Uri "$candidateUrl/health" -Method Get
 if (-not $health.ok) { throw "Candidate health response did not report ok=true." }
 Test-HttpStatus "$candidateUrl/mcp" 401
-$accessToken = (& gcloud secrets versions access $accessVersion --secret youtube-mcp-access-token --project $ProjectId).Trim()
+$accessToken = (@(& gcloud secrets versions access $accessVersion --secret youtube-mcp-access-token --project $ProjectId) -join "").Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) { throw "Could not read the pinned bearer secret version." }
 $priorSmokeToken = $env:MCP_SMOKE_ACCESS_TOKEN
 try {
@@ -223,7 +228,8 @@ finally {
 
 Write-Host "[5/6] Candidate smoke passed." -ForegroundColor Green
 if ($Promote) {
-  Invoke-Gcloud run services update-traffic $ServiceName --project $ProjectId --region $Region --to-tags "candidate=100" --quiet
+  Invoke-Gcloud run services update-traffic $ServiceName --project $ProjectId --region $Region --remove-tags candidate --quiet
+  Invoke-Gcloud run services update-traffic $ServiceName --project $ProjectId --region $Region --to-revisions "$candidateRevision=100" --quiet
   Write-Host "Promoted candidate to 100%." -ForegroundColor Green
 }
 else { Write-Host "Candidate remains at 0%; promote it only after approval." -ForegroundColor Yellow }
@@ -240,5 +246,5 @@ Write-Host "Image:      $immutableImage"
 Write-Host "Revision:   $candidateRevision"
 Write-Host "Candidate:  $candidateUrl/mcp"
 Write-Host "Production: $serviceUrl/mcp"
-Write-Host "Health:     $serviceUrl/healthz"
+Write-Host "Health:     $serviceUrl/health"
 Write-Host "Secrets:    youtube-mcp-access-token:$accessVersion, youtube-mcp-cursor-secret:$cursorSecretVersion, youtube-data-api-key:$apiKeyVersion"

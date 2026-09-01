@@ -56,14 +56,14 @@ Generic MCP client configuration:
 
 ## Google Cloud Run
 
-The cloud profile is a single public Cloud Run service with bearer-protected `/mcp` and public `/healthz`. Firestore makes daily quota guards transactional across requests, restarts, and up to two instances; the MCP transport remains stateless.
+The cloud profile is a single public Cloud Run service with bearer-protected `/mcp` and public `/health`. Local HTTP defaults remain on `/healthz`. Firestore makes daily quota guards transactional across requests, restarts, and up to two instances; the MCP transport remains stateless.
 
 ```powershell
 pwsh -File .\scripts\provision-gcp.ps1 -ProjectId "YOUR_PROJECT_ID"
 pwsh -File .\scripts\deploy-cloud-run.ps1 -ProjectId "YOUR_PROJECT_ID" -Promote
 ```
 
-Deployment requires a clean Git worktree. It builds a full Git SHA tag, resolves the Artifact Registry digest, creates a tagged zero-traffic candidate, checks `/healthz`, bearer rejection, and the exact four-tool contract, and promotes only with `-Promote`. Bearer rotation occurs only with `-RotateAccessToken`. See [docs/CLOUD_RUN.md](docs/CLOUD_RUN.md).
+Deployment requires a clean Git worktree. It builds a full Git SHA tag, resolves the Artifact Registry digest, creates a tagged zero-traffic candidate, checks `/health`, bearer rejection, and the exact four-tool contract, and promotes only with `-Promote`. Bearer rotation occurs only with `-RotateAccessToken`. See [docs/CLOUD_RUN.md](docs/CLOUD_RUN.md).
 
 Cloud plugin configuration lives in `.mcp.json`. `scripts/sync-codex-plugin.ps1` can build local or cloud plugin profiles, but changes the user's plugin installation and is not part of CI or deployment.
 
@@ -89,7 +89,7 @@ Hosts that implement OpenAI [Tool Search](https://developers.openai.com/api/docs
 | `YOUTUBE_MAX_RESULT_BYTES` | `12288` | Default result limit; hard maximum 32,768 |
 | `MCP_TRANSPORT` | auto | stdio locally, HTTP on Cloud Run; CLI flag wins |
 | `MCP_PATH` | `/mcp` | Streamable HTTP path |
-| `HEALTH_PATH` | `/healthz` | Public health path |
+| `HEALTH_PATH` | `/healthz` locally; `/health` on Cloud Run | Public health path |
 | `HTTP_MAX_BODY_BYTES` | `2097152` | Maximum request body (2 MiB) |
 | `HTTP_REQUEST_TIMEOUT_MS` | `300000` | Node request timeout aligned with Cloud Run |
 | `MCP_ACCESS_TOKEN` | empty | Required fixed bearer in HTTP mode |

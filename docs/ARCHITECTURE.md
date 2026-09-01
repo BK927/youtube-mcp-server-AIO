@@ -13,7 +13,7 @@ Remote client --HTTPS + bearer--> HTTP boundary --> four MCP tools
                                          |          |       +-> yt-dlp / YouTube.js transcripts
                                          |          +-> YouTube Data API v3
                                          |
-                                         +-> /healthz
+                                         +-> /health (Cloud Run; /healthz locally)
 
 Local state: bounded LRU TTL cache + memory quota store
 Cloud state: bounded per-instance cache + transactional Firestore quota store
@@ -25,7 +25,7 @@ Cloud state: bounded per-instance cache + transactional Firestore quota store
 - `src/youtube-service.ts` resolves references, chooses providers, applies cache/quota controls, and returns provider-neutral data.
 - `src/providers` isolates official and unofficial upstream behavior.
 - `src/quota/quota-store.ts` supplies memory and Firestore adapters behind one contract.
-- `src/http` owns bearer, Host/Origin checks, 2 MiB request limits, `/mcp`, and `/healthz`.
+- `src/http` owns bearer, Host/Origin checks, 2 MiB request limits, `/mcp`, and the configured health path.
 
 ## Compact contract
 
