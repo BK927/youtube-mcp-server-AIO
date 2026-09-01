@@ -37,7 +37,7 @@ function New-RandomHex {
 
 function Get-LatestSecretVersion {
   param([string]$Name)
-  $raw = [string](& gcloud secrets versions list $Name --project $ProjectId --filter "state=ENABLED" --sort-by "~createTime" --limit 1 --format "value(name)")
+  $raw = @(& gcloud secrets versions list $Name --project $ProjectId --filter "state=ENABLED" --sort-by "~createTime" --limit 1 --format "value(name)") -join ""
   $raw = $raw.Trim()
   if ($LASTEXITCODE -ne 0) { throw "Could not list versions for '$Name'. Run provision-gcp.ps1 first." }
   if ([string]::IsNullOrWhiteSpace($raw)) { throw "Secret '$Name' has no enabled numeric version." }
