@@ -179,7 +179,7 @@ if ($serviceExists) {
 if ([string]::IsNullOrWhiteSpace($candidateUrl)) {
   Write-Host "[2/6] Discovering the stable candidate tag URL..." -ForegroundColor Cyan
   $bootstrapHosts = if ($serviceUrl) { ([Uri]$serviceUrl).Host } else { "" }
-  Deploy-Candidate "$shortSha-bootstrap-$revisionNonce" $serviceUrl $bootstrapHosts $true
+  Deploy-Candidate "$shortSha-bootstrap-$revisionNonce" $serviceUrl $bootstrapHosts $serviceExists
   $serviceDocument = Get-ServiceDocument
   $serviceUrl = [string]$serviceDocument.status.url
   $candidateUrl = Get-TaggedUrl $serviceDocument "candidate"
