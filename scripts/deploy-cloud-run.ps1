@@ -76,22 +76,46 @@ function Get-TaggedRevision {
   return [string]$match[0].revisionName
 }
 
+function New-GcloudEnvironmentFile {
+  param([System.Collections.IDictionary]$Values)
+  $path = Join-Path ([IO.Path]::GetTempPath()) ("youtube-mcp-env-{0}.json" -f [Guid]::NewGuid().ToString("N"))
+  $json = $Values | ConvertTo-Json -Compress
+  [IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))
+  return $path
+}
+
 function Deploy-Candidate {
   param([string]$RevisionSuffix, [string]$PublicBaseUrl, [string]$AllowedHosts, [bool]$NoTraffic)
-  $envValues = "^@^MCP_TRANSPORT=http@HOST=0.0.0.0@PORT=8080@MCP_PATH=/mcp@HEALTH_PATH=/healthz@HTTP_MAX_BODY_BYTES=2097152@HTTP_REQUEST_TIMEOUT_MS=300000@MCP_ALLOW_UNAUTHENTICATED=false@PUBLIC_BASE_URL=$PublicBaseUrl@MCP_ALLOWED_HOSTS=$AllowedHosts@YOUTUBE_QUOTA_STORE=firestore@GOOGLE_CLOUD_PROJECT=$ProjectId@YOUTUBE_CURSOR_TTL_SECONDS=86400@YOUTUBE_MAX_RESULT_BYTES=12288"
-  $secretValues = "^@^MCP_ACCESS_TOKEN=youtube-mcp-access-token:$accessVersion@YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion@YOUTUBE_API_KEY=youtube-data-api-key:$apiKeyVersion"
+  $environmentFile = New-GcloudEnvironmentFile ([ordered]@{
+    MCP_TRANSPORT = "http"
+    HOST = "0.0.0.0"
+    PORT = "8080"
+    MCP_PATH = "/mcp"
+    HEALTH_PATH = "/healthz"
+    HTTP_MAX_BODY_BYTES = "2097152"
+    HTTP_REQUEST_TIMEOUT_MS = "300000"
+    MCP_ALLOW_UNAUTHENTICATED = "false"
+    PUBLIC_BASE_URL = $PublicBaseUrl
+    MCP_ALLOWED_HOSTS = $AllowedHosts
+    YOUTUBE_QUOTA_STORE = "firestore"
+    GOOGLE_CLOUD_PROJECT = $ProjectId
+    YOUTUBE_CURSOR_TTL_SECONDS = "86400"
+    YOUTUBE_MAX_RESULT_BYTES = "12288"
+  })
+  $secretValues = "MCP_ACCESS_TOKEN=youtube-mcp-access-token:$accessVersion,YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion,YOUTUBE_API_KEY=youtube-data-api-key:$apiKeyVersion"
   $arguments = @(
     "run", "deploy", $ServiceName, "--project", $ProjectId, "--region", $Region,
     "--image", $immutableImage, "--allow-unauthenticated", "--ingress", "all",
     "--execution-environment", "gen2", "--service-account", $runtimeServiceAccount,
     "--port", "8080", "--cpu", "1", "--memory", "1Gi", "--concurrency", "4",
     "--timeout", "300", "--min-instances", "0", "--max-instances", "2",
-    "--set-env-vars", $envValues, "--set-secrets", $secretValues,
+    "--env-vars-file", $environmentFile, "--set-secrets", $secretValues,
     "--revision-suffix", $RevisionSuffix, "--tag", "candidate",
     "--labels", "app=youtube-mcp-aio,git-sha=$shortSha", "--quiet"
   )
   if ($NoTraffic) { $arguments += "--no-traffic" }
-  Invoke-Gcloud @arguments
+  try { Invoke-Gcloud @arguments }
+  finally { Remove-Item -LiteralPath $environmentFile -Force -ErrorAction SilentlyContinue }
 }
 
 function Test-HttpStatus {

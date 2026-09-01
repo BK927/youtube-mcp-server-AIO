@@ -60,8 +60,9 @@ assert 'if ($RotateAccessToken) { Add-SecretVersion "youtube-mcp-access-token"' 
 assert provision.count('Add-SecretVersion "youtube-mcp-access-token"') == 1
 assert 'if (-not (Get-LatestSecretVersion "youtube-mcp-access-token")) {' in provision
 assert "--no-traffic" in deployment and "candidate=100" in deployment
-assert "HTTP_MAX_BODY_BYTES=2097152" in deployment
-assert "YOUTUBE_MAX_RESULT_BYTES=12288" in deployment
+assert 'HTTP_MAX_BODY_BYTES = "2097152"' in deployment
+assert 'YOUTUBE_MAX_RESULT_BYTES = "12288"' in deployment
+assert '"--env-vars-file", $environmentFile' in deployment
 assert "YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion" in deployment
 
 for path in [ROOT / ".env.example", ROOT / "README.md", ROOT / "src", ROOT / "scripts"]:
