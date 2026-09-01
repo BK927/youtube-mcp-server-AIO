@@ -6,7 +6,7 @@ param(
   [string]$Region = "asia-northeast1",
   [string]$RepositoryName = "mcp",
   [string]$RuntimeServiceAccountName = "youtube-mcp-runner",
-  [string]$ApiKeyId = "youtube-mcp-aio-v2"
+  [string]$ApiKeyId = "youtube-mcp-aio-v3"
 )
 
 Set-StrictMode -Version Latest
