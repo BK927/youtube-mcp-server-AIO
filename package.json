@@ -1,0 +1,48 @@
+{
+  "name": "youtube-mcp-server-aio",
+  "version": "0.2.0",
+  "description": "Evidence-first, quota-aware all-in-one YouTube MCP server",
+  "type": "module",
+  "bin": {
+    "youtube-mcp-aio": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/index.ts --http",
+    "start": "node dist/index.js",
+    "start:http": "node dist/index.js --http",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "youtube",
+    "transcript",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "dotenv": "17.4.2",
+    "youtubei.js": "18.0.0",
+    "zod": "4.5.2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/node": "26.4.0",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}
