@@ -291,7 +291,17 @@ export class YouTubeJsTranscriptProvider implements TranscriptProvider {
     const client = await this.getClient();
     const clientErrors: string[] = [];
 
-    for (const clientType of ["ANDROID", "IOS", "WEB"] as const) {
+    for (const clientType of [
+      "WEB_EMBEDDED",
+      "TV_EMBEDDED",
+      "TV_SIMPLY",
+      "TV",
+      "ANDROID_VR",
+      "ANDROID",
+      "IOS",
+      "MWEB",
+      "WEB",
+    ] as const) {
       try {
         const info = await client.getBasicInfo(request.videoId, {
           client: clientType,

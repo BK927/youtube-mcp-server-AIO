@@ -82,7 +82,9 @@ assert "Get-StableRevision" in deploy
 assert 'secret = "youtube-mcp-cursor-secret"; version = $cursorSecretVersion' in deployment
 
 ytdlp_provider = (ROOT / "src" / "providers" / "transcript" / "ytdlp-provider.ts").read_text(encoding="utf-8")
-assert "youtube:player_client=web,mweb,web_safari,tv" in ytdlp_provider
+assert "youtube:player_client=web_embedded,tv,android_vr,web" in ytdlp_provider
+youtubejs_provider = (ROOT / "src" / "providers" / "transcript" / "youtubejs-provider.ts").read_text(encoding="utf-8")
+assert '"WEB_EMBEDDED"' in youtubejs_provider and '"TV_EMBEDDED"' in youtubejs_provider
 
 for path in [ROOT / ".env.example", ROOT / "README.md", ROOT / "src", ROOT / "scripts"]:
     files = [path] if path.is_file() else [p for p in path.rglob("*") if p.is_file()]

@@ -204,7 +204,7 @@ export class YtDlpTranscriptProvider implements TranscriptProvider {
         "--js-runtimes",
         "node",
         "--extractor-args",
-        "youtube:player_client=web,mweb,web_safari,tv",
+        "youtube:player_client=web_embedded,tv,android_vr,web",
         "--extractor-args",
         "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
       );
