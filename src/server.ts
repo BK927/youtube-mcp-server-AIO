@@ -55,6 +55,9 @@ const TOOL_SCHEMAS: Record<string, unknown> = {
       query: "required for global/transcript; optional for channel",
       within: "channel for channel scope; video for transcript scope",
       filters: {
+        global: ["order", "channel_id", "published_after", "published_before", "region", "language", "safe_search", "video_duration"],
+        channel: ["strategy"],
+        transcript: ["language", "match_mode", "case_sensitive", "context_segments", "from", "to"],
         trending: ["region", "category_id"],
         note: "filters.region overrides an explicit locale region such as ko-KR",
       },
@@ -337,6 +340,87 @@ function capText(value: string, limit: number): {
   return { text: value.slice(0, Math.max(1, limit)), truncated: true };
 }
 
+interface CappedTranscript {
+  data: Record<string, unknown>;
+  items: unknown[];
+  warning: string | undefined;
+}
+
+function capTranscriptPayload(
+  data: Record<string, unknown>,
+  inputItems: unknown[],
+  maxChars: number,
+): CappedTranscript {
+  const outputData = { ...data };
+  const aggregateText =
+    typeof outputData.text === "string" ? outputData.text : undefined;
+  delete outputData.text;
+
+  const itemBudget = aggregateText
+    ? Math.max(1, Math.floor(maxChars * 0.65))
+    : maxChars;
+  let remaining = itemBudget;
+  let textCharsReturned = 0;
+  let truncatedTextFields = 0;
+  const items: Record<string, unknown>[] = [];
+
+  for (const value of inputItems) {
+    const segment = record(value);
+    const text = typeof segment.text === "string" ? segment.text : "";
+    if (!text || remaining <= 0) break;
+    if (text.length <= remaining) {
+      items.push({ ...segment, text });
+      remaining -= text.length;
+      textCharsReturned += text.length;
+      continue;
+    }
+    if (items.length === 0) {
+      const capped = capText(text, remaining);
+      items.push({ ...segment, text: capped.text, textTruncated: true });
+      textCharsReturned += capped.text.length;
+      truncatedTextFields += 1;
+    }
+    break;
+  }
+
+  if (aggregateText !== undefined) {
+    const aggregateBudget = Math.max(0, maxChars - textCharsReturned);
+    if (aggregateBudget > 0) {
+      const capped = capText(aggregateText, aggregateBudget);
+      outputData.text = capped.text;
+      textCharsReturned += capped.text.length;
+      if (capped.truncated) truncatedTextFields += 1;
+    }
+  }
+
+  const omittedItems = inputItems.length - items.length;
+  const truncated =
+    omittedItems > 0 ||
+    truncatedTextFields > 0 ||
+    (aggregateText !== undefined && outputData.text === undefined);
+  if (!truncated) {
+    if (aggregateText !== undefined) outputData.text = aggregateText;
+    return { data: outputData, items, warning: undefined };
+  }
+
+  outputData.truncation = {
+    truncated: true,
+    reason: "max_chars",
+    max_chars: maxChars,
+    original_items: inputItems.length,
+    returned_items: items.length,
+    omitted_items: omittedItems,
+    truncated_text_fields: truncatedTextFields,
+    text_chars_returned: textCharsReturned,
+  };
+  return {
+    data: outputData,
+    items,
+    warning:
+      "Transcript text was bounded to max_chars; structural fields remain intact and next_cursor continues at the first omitted segment.",
+  };
+}
+
 function capCommentPayload(
   data: Record<string, unknown>,
   inputItems: unknown[],
@@ -416,14 +500,18 @@ function capCommentPayload(
     }
   }
 
-  const items = prepared.map((entry) => ({
-    ...entry.thread,
-    replies: entry.replies,
-    repliesReturned: entry.replies.length,
-    repliesComplete:
-      record(entry.thread).repliesComplete === true &&
-      entry.replies.length === entry.rawReplies.length,
-  }));
+  const items = prepared.map((entry) => {
+    const repliesIncluded = record(entry.thread).repliesIncluded === true;
+    return {
+      ...entry.thread,
+      replies: entry.replies,
+      repliesReturned: entry.replies.length,
+      repliesComplete: repliesIncluded
+        ? record(entry.thread).repliesComplete === true &&
+          entry.replies.length === entry.rawReplies.length
+        : null,
+    };
+  });
   const truncated =
     omittedItems > 0 || omittedReplies > 0 || truncatedTextFields > 0;
   if (!truncated) return { data, items, warning: undefined };
@@ -626,31 +714,59 @@ export function createYoutubeMcpServer(
             includeText,
             includeTimestamps,
           };
+          const pageOffset = offset(
+            codec,
+            cursor,
+            "youtube_video_get",
+            cursorFilters,
+          );
           const result = await service.getTranscript(videoId, {
             language,
-            offset: offset(codec, cursor, "youtube_video_get", cursorFilters),
+            offset: pageOffset,
             limit,
             includeText,
             includeTimestamps,
           });
           const resultRecord = record(result);
+          const transcriptData = without(resultRecord, [
+            "segments",
+            "nextOffset",
+            "warnings",
+          ]);
+          const capped = capTranscriptPayload(
+            transcriptData,
+            result.segments,
+            maxChars,
+          );
+          const continuationOffset =
+            capped.items.length < result.segments.length
+              ? pageOffset + capped.items.length
+              : result.nextOffset;
           const next =
-            result.nextOffset === undefined
+            continuationOffset === undefined
               ? null
               : nextCursor(codec, "youtube_video_get", cursorFilters, {
-                  offset: result.nextOffset,
+                  offset: continuationOffset,
                 });
+          const sourceRecord = capped.warning
+            ? {
+                ...resultRecord,
+                warnings: [
+                  ...stringArray(resultRecord.warnings),
+                  capped.warning,
+                ],
+              }
+            : resultRecord;
           return payload(
             "collection",
-            without(resultRecord, ["segments", "nextOffset", "warnings"]),
-            result.segments,
+            capped.data,
+            capped.items,
             next,
             canonicalUri,
-            resultRecord,
+            sourceRecord,
             { data: 0, search: 0 },
             ["items[].text", "data.text"],
             config,
-            maxChars,
           );
         }
 
@@ -812,18 +928,55 @@ export function createYoutubeMcpServer(
         }
 
         if (scope === "channel") {
-          checkedFilters(filters, []);
+          const normalized = checkedFilters(filters, ["strategy"]);
           const channel = requireArgument(within, "within");
           const normalizedQuery = query.trim();
-          const searchFilters = { scope, channel, query: normalizedQuery };
-          const result = await service.listChannelVideos(
-            channel,
-            Math.min(limit, 50),
-            pageToken(codec, cursor, "youtube_search", searchFilters),
+          const requestedStrategy = enumFilter(
+            normalized,
+            "strategy",
+            ["auto", "search", "uploads"],
+            "auto",
           );
+          const strategy =
+            requestedStrategy === "auto"
+              ? normalizedQuery
+                ? "search"
+                : "uploads"
+              : requestedStrategy;
+          if (strategy === "search" && !normalizedQuery) {
+            throw new YouTubeMcpError(
+              "INVALID_ARGUMENT",
+              "channel strategy=search requires query.",
+            );
+          }
+          const searchFilters = {
+            scope,
+            channel,
+            query: normalizedQuery,
+            strategy,
+          };
+          const upstreamCursor = pageToken(
+            codec,
+            cursor,
+            "youtube_search",
+            searchFilters,
+          );
+          const result =
+            strategy === "search"
+              ? await service.searchChannelVideos(
+                  channel,
+                  normalizedQuery,
+                  Math.min(limit, 50),
+                  upstreamCursor,
+                )
+              : await service.listChannelVideos(
+                  channel,
+                  Math.min(limit, 50),
+                  upstreamCursor,
+                );
           const rawItems = Array.isArray(result.items) ? result.items : [];
           const needle = normalizedQuery.toLocaleLowerCase();
-          const items = needle
+          const items = strategy === "uploads" && needle
             ? rawItems.filter((item) => {
                 const value = record(item);
                 return `${String(value.title ?? "")} ${String(value.description ?? "")}`
@@ -847,7 +1000,9 @@ export function createYoutubeMcpServer(
             next,
             `youtube://entity/channel/${channelId}`,
             result,
-            { data: 2, search: 0 },
+            strategy === "search"
+              ? { data: 1, search: 1 }
+              : { data: 2, search: 0 },
             ["data.channel.title", "data.channel.description", "items[].title", "items[].description"],
             config,
           );

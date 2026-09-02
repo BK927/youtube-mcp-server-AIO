@@ -490,6 +490,42 @@ export class YouTubeDataApiClient {
     };
   }
 
+  async searchChannelVideos(
+    reference: ChannelReference,
+    query: string,
+    maxResults: number,
+    pageToken: string | undefined,
+  ): Promise<Record<string, unknown>> {
+    const channel = await this.getChannel(reference);
+    const channelId = channel.id;
+    if (typeof channelId !== "string" || !channelId) {
+      throw new YouTubeMcpError(
+        "CHANNEL_NOT_FOUND",
+        "The channel did not expose a usable ID.",
+        { reference },
+      );
+    }
+    const page = await this.searchVideos(query, {
+      maxResults,
+      pageToken,
+      order: "relevance",
+      channelId,
+      publishedAfter: undefined,
+      publishedBefore: undefined,
+      regionCode: undefined,
+      relevanceLanguage: undefined,
+      safeSearch: "moderate",
+      videoDuration: "any",
+    });
+    return {
+      channel,
+      ...page,
+      retrievalStrategy: "search.list(q, channelId, type=video)",
+      resultLimitNote:
+        "YouTube limits channelId+type=video search results to at most 500 videos.",
+    };
+  }
+
   private async listPlaylistItems(
     playlistId: string,
     maxResults: number,
@@ -618,14 +654,23 @@ export class YouTubeDataApiClient {
           topLevelComment: normalizeComment(
             thread.snippet?.topLevelComment,
           ),
+          repliesIncluded: requestReplies,
           replies,
           repliesReturned: replies.length,
-          repliesComplete: !includeReplies || replies.length >= totalReplyCount,
+          repliesComplete:
+            requestReplies ? replies.length >= totalReplyCount : null,
         };
       }),
       nextPageToken: response.nextPageToken ?? null,
       prevPageToken: response.prevPageToken ?? null,
-      pageInfo: response.pageInfo ?? null,
+      pageInfo: response.pageInfo
+        ? {
+            ...response.pageInfo,
+            estimatedTotalResults: response.pageInfo.totalResults ?? null,
+            totalResults: null,
+            totalResultsReliable: false,
+          }
+        : null,
       provider: "youtube-data-api-v3",
       note:
         "Embedded replies are capped by reply_limit and may be partial.",

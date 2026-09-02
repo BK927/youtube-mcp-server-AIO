@@ -193,6 +193,9 @@ export class YouTubeService {
       try {
         return await this.dataApi.getVideo(videoId);
       } catch (error) {
+        if (error instanceof YouTubeMcpError && error.code === "VIDEO_NOT_FOUND") {
+          throw error;
+        }
         if (this.config.providerMode !== "hybrid") throw error;
         const fallback = await this.oEmbed.getVideo(videoId);
         return {
@@ -313,6 +316,20 @@ export class YouTubeService {
   ): Promise<Record<string, unknown>> {
     return this.requireDataApi().listChannelVideos(
       extractChannelReference(reference),
+      maxResults,
+      pageToken,
+    );
+  }
+
+  searchChannelVideos(
+    reference: string,
+    query: string,
+    maxResults: number,
+    pageToken: string | undefined,
+  ): Promise<Record<string, unknown>> {
+    return this.requireDataApi().searchChannelVideos(
+      extractChannelReference(reference),
+      query,
       maxResults,
       pageToken,
     );

@@ -23,10 +23,21 @@ export class OEmbedClient {
     try {
       const response = await fetch(endpoint, { signal: controller.signal });
       if (!response.ok) {
+        if (response.status === 400 || response.status === 404) {
+          throw new YouTubeMcpError(
+            "VIDEO_NOT_FOUND",
+            "YouTube did not expose an accessible video for this ID.",
+            { videoId, status: response.status },
+            false,
+          );
+        }
         throw new YouTubeMcpError(
-          "OEMBED_REQUEST_FAILED",
+          response.status === 429
+            ? "OEMBED_RATE_LIMITED"
+            : "OEMBED_REQUEST_FAILED",
           `YouTube oEmbed returned HTTP ${response.status}.`,
           { videoId, status: response.status },
+          response.status === 429 || response.status >= 500,
         );
       }
       const data = (await response.json()) as OEmbedResponse;

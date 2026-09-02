@@ -81,7 +81,8 @@ describe("public tool routing", () => {
           topLevelComment: { id: "comment-1", text: "comment text" },
           replies: [],
           repliesReturned: 0,
-          repliesComplete: true,
+          repliesIncluded: false,
+          repliesComplete: null,
         },
       ],
       warnings: [],
@@ -184,7 +185,8 @@ describe("public tool routing", () => {
               topLevelComment: { id: "comment-1", text: "comment text" },
               replies: [],
               repliesReturned: 0,
-              repliesComplete: true,
+              repliesIncluded: false,
+              repliesComplete: null,
             },
           ],
           page: { returned: 1, has_more: false, next_cursor: null },
@@ -240,7 +242,9 @@ describe("public tool routing", () => {
               })).slice(0, replyLimit)
             : [],
           repliesReturned: includeReplies ? Math.min(3, replyLimit) : 0,
-          repliesComplete: !includeReplies || replyLimit >= 3,
+          repliesIncluded: includeReplies && replyLimit > 0,
+          repliesComplete:
+            includeReplies && replyLimit > 0 ? replyLimit >= 3 : null,
         })),
         warnings: [],
       }),
@@ -343,6 +347,11 @@ describe("public tool routing", () => {
       channel: { id: CHANNEL_ID, title: "Channel" },
       items: [{ id: "channel-video", title: "Channel upload" }],
     }));
+    const searchChannelVideos = vi.fn(async () => ({
+      provider: "channel-search-provider",
+      channel: { id: CHANNEL_ID, title: "Channel" },
+      items: [{ id: "matched-video", title: "Godot tutorial" }],
+    }));
     const searchTranscript = vi.fn(async () => ({
       videoId: VIDEO_ID,
       provider: "transcript-provider",
@@ -358,6 +367,7 @@ describe("public tool routing", () => {
     const { client, server } = await connectedClient({
       searchVideos,
       listChannelVideos,
+      searchChannelVideos,
       searchTranscript,
       trending,
     });
@@ -392,6 +402,33 @@ describe("public tool routing", () => {
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: null,
           provider: "global-provider",
+        },
+      },
+      {
+        arguments: {
+          scope: "channel",
+          query: "Godot",
+          within: CHANNEL_ID,
+          filters: { strategy: "auto" },
+          limit: 3,
+        },
+        assertCall: () =>
+          expect(searchChannelVideos).toHaveBeenCalledWith(
+            CHANNEL_ID,
+            "Godot",
+            3,
+            undefined,
+          ),
+        expected: {
+          kind: "collection",
+          data: {
+            provider: "channel-search-provider",
+            channel: { id: CHANNEL_ID, title: "Channel" },
+          },
+          items: [{ id: "matched-video", title: "Godot tutorial" }],
+          page: { returned: 1, has_more: false, next_cursor: null },
+          canonical_uri: `youtube://entity/channel/${CHANNEL_ID}`,
+          provider: "channel-search-provider",
         },
       },
       {

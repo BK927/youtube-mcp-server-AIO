@@ -345,14 +345,45 @@ describe("MCP protocol surface", () => {
         Buffer.byteLength(JSON.stringify(result.structuredContent), "utf8"),
       ).toBeLessThanOrEqual(12_288);
       const envelope = result.structuredContent as {
-        data: unknown;
-        items: Array<{ text?: string }>;
-        page: { returned: number };
+        data: {
+          availableLanguages: string[];
+          truncation?: {
+            truncated: boolean;
+            reason: string;
+            original_items: number;
+            returned_items: number;
+          };
+        };
+        items: Array<{ text?: string; timestamp?: string; url?: string }>;
+        page: { returned: number; has_more: boolean; next_cursor: string | null };
+        meta: { warnings: string[] };
       };
-      expect(envelope.page.returned).toBeLessThanOrEqual(50);
+      expect(envelope.items.length).toBeGreaterThan(0);
+      expect(envelope.items.length).toBeLessThan(50);
+      expect(envelope.page.returned).toBe(envelope.items.length);
+      expect(envelope.page.has_more).toBe(true);
+      expect(envelope.page.next_cursor).toBeTruthy();
+      expect(envelope.data.availableLanguages).toEqual(["en"]);
+      expect(envelope.data.truncation).toMatchObject({
+        truncated: true,
+        reason: "max_chars",
+        original_items: 50,
+        returned_items: envelope.items.length,
+      });
       expect(
-        stringCharacterCount(envelope.data) + stringCharacterCount(envelope.items),
+        envelope.items.reduce(
+          (total, item) => total + (item.text?.length ?? 0),
+          0,
+        ),
       ).toBeLessThanOrEqual(256);
+      expect(
+        envelope.items.every(
+          (item) => item.text && item.timestamp && item.url,
+        ),
+      ).toBe(true);
+      expect(envelope.meta.warnings).toContain(
+        "Transcript text was bounded to max_chars; structural fields remain intact and next_cursor continues at the first omitted segment.",
+      );
     } finally {
       await client.close();
       await server.close();
