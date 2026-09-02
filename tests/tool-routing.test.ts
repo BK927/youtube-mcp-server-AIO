@@ -43,6 +43,7 @@ describe("public tool routing", () => {
       id: VIDEO_ID,
       title: "Metadata title",
       description: "Metadata description",
+      channelTitle: "Metadata channel",
       provider: "metadata-provider",
       warnings: ["metadata warning"],
     }));
@@ -102,6 +103,7 @@ describe("public tool routing", () => {
             id: VIDEO_ID,
             title: "Metadata title",
             description: "Metadata description",
+            channelTitle: "Metadata channel",
             provider: "metadata-provider",
           },
           items: [],
@@ -136,7 +138,7 @@ describe("public tool routing", () => {
             videoId: VIDEO_ID,
             provider: "transcript-provider",
             language: "ko",
-            availableLanguages: ["ko"],
+            availableLanguageCount: 1,
             generated: false,
             totalSegments: 1,
             durationSeconds: 2,
@@ -205,6 +207,13 @@ describe("public tool routing", () => {
         expect(result.isError).not.toBe(true);
         route.assertCall();
         expect(selectedOutput(result)).toEqual(route.expected);
+        if (route.arguments.view === "metadata") {
+          expect(
+            (result.structuredContent as {
+              meta: { untrusted_fields: string[] };
+            }).meta.untrusted_fields,
+          ).toContain("data.channelTitle");
+        }
       }
     } finally {
       await client.close();
@@ -340,17 +349,17 @@ describe("public tool routing", () => {
     const searchVideos = vi.fn(async () => ({
       provider: "global-provider",
       totalResults: 1,
-      items: [{ id: "global-video", title: "Global" }],
+      items: [{ id: "global-video", title: "Global", channelTitle: "Global channel" }],
     }));
     const listChannelVideos = vi.fn(async () => ({
       provider: "channel-provider",
       channel: { id: CHANNEL_ID, title: "Channel" },
-      items: [{ id: "channel-video", title: "Channel upload" }],
+      items: [{ id: "channel-video", title: "Channel upload", channelTitle: "Channel" }],
     }));
     const searchChannelVideos = vi.fn(async () => ({
       provider: "channel-search-provider",
       channel: { id: CHANNEL_ID, title: "Channel" },
-      items: [{ id: "matched-video", title: "Godot tutorial" }],
+      items: [{ id: "matched-video", title: "Godot tutorial", channelTitle: "Channel" }],
     }));
     const searchTranscript = vi.fn(async () => ({
       videoId: VIDEO_ID,
@@ -362,7 +371,7 @@ describe("public tool routing", () => {
     const trending = vi.fn(async () => ({
       provider: "trending-provider",
       regionCode: "KR",
-      items: [{ id: "trending-video", title: "Trending" }],
+      items: [{ id: "trending-video", title: "Trending", channelTitle: "Trending channel" }],
     }));
     const { client, server } = await connectedClient({
       searchVideos,
@@ -398,7 +407,7 @@ describe("public tool routing", () => {
         expected: {
           kind: "collection",
           data: { provider: "global-provider", totalResults: 1 },
-          items: [{ id: "global-video", title: "Global" }],
+          items: [{ id: "global-video", title: "Global", channelTitle: "Global channel" }],
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: null,
           provider: "global-provider",
@@ -425,7 +434,7 @@ describe("public tool routing", () => {
             provider: "channel-search-provider",
             channel: { id: CHANNEL_ID, title: "Channel" },
           },
-          items: [{ id: "matched-video", title: "Godot tutorial" }],
+          items: [{ id: "matched-video", title: "Godot tutorial", channelTitle: "Channel" }],
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: `youtube://entity/channel/${CHANNEL_ID}`,
           provider: "channel-search-provider",
@@ -449,7 +458,7 @@ describe("public tool routing", () => {
             provider: "channel-provider",
             channel: { id: CHANNEL_ID, title: "Channel" },
           },
-          items: [{ id: "channel-video", title: "Channel upload" }],
+          items: [{ id: "channel-video", title: "Channel upload", channelTitle: "Channel" }],
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: `youtube://entity/channel/${CHANNEL_ID}`,
           provider: "channel-provider",
@@ -509,7 +518,7 @@ describe("public tool routing", () => {
         expected: {
           kind: "collection",
           data: { provider: "trending-provider", regionCode: "KR" },
-          items: [{ id: "trending-video", title: "Trending" }],
+          items: [{ id: "trending-video", title: "Trending", channelTitle: "Trending channel" }],
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: null,
           provider: "trending-provider",
@@ -526,6 +535,13 @@ describe("public tool routing", () => {
         expect(result.isError).not.toBe(true);
         route.assertCall();
         expect(selectedOutput(result)).toEqual(route.expected);
+        if (route.arguments.scope !== "transcript") {
+          expect(
+            (result.structuredContent as {
+              meta: { untrusted_fields: string[] };
+            }).meta.untrusted_fields,
+          ).toContain("items[].channelTitle");
+        }
       }
     } finally {
       await client.close();
@@ -651,6 +667,7 @@ describe("public tool routing", () => {
     const playlist = {
       id: PLAYLIST_ID,
       title: "Playlist title",
+      channelTitle: "Playlist channel",
       provider: "playlist-provider",
     };
     const getPlaylist = vi.fn(
@@ -665,7 +682,7 @@ describe("public tool routing", () => {
               playlist,
               page: {
                 totalResults: 1,
-                items: [{ id: "playlist-item", title: "Playlist item" }],
+                items: [{ id: "playlist-item", title: "Playlist item", channelTitle: "Item channel" }],
               },
             }
           : { playlist },
@@ -677,7 +694,7 @@ describe("public tool routing", () => {
         expected: {
           kind: "collection",
           data: { playlist, page: { totalResults: 1 } },
-          items: [{ id: "playlist-item", title: "Playlist item" }],
+          items: [{ id: "playlist-item", title: "Playlist item", channelTitle: "Item channel" }],
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: `youtube://entity/playlist/${PLAYLIST_ID}`,
           provider: "playlist-provider",
@@ -708,6 +725,15 @@ describe("public tool routing", () => {
         });
         expect(result.isError).not.toBe(true);
         expect(selectedOutput(result)).toEqual(route.expected);
+        const untrusted = (result.structuredContent as {
+          meta: { untrusted_fields: string[] };
+        }).meta.untrusted_fields;
+        expect(untrusted).toContain(
+          route.include_items ? "data.playlist.channelTitle" : "data.channelTitle",
+        );
+        if (route.include_items) {
+          expect(untrusted).toContain("items[].channelTitle");
+        }
       }
       expect(getPlaylist.mock.calls).toEqual([
         [PLAYLIST_ID, 8, undefined, true],

@@ -40,7 +40,16 @@ const TOOL_SCHEMAS: Record<string, unknown> = {
       video: "YouTube video ID or URL",
       view: ["metadata", "transcript", "comments"],
       options: {
-        transcript: ["language", "include_text", "include_timestamps"],
+        transcript: {
+          fields: [
+            "language",
+            "include_text",
+            "include_timestamps",
+            "include_available_languages",
+          ],
+          available_languages:
+            "omitted by default; opt in on page one and omitted from cursor pages",
+        },
         comments: ["order", "include_replies", "reply_limit"],
       },
       cursor: "opaque signed cursor",
@@ -687,7 +696,7 @@ export function createYoutubeMcpServer(
             canonicalUri,
             result,
             { data: provider(result) === "youtube-data-api-v3" ? 1 : 0, search: 0 },
-            ["data.title", "data.description", "data.tags"],
+            ["data.title", "data.description", "data.tags", "data.channelTitle"],
             config,
             maxChars,
           );
@@ -698,6 +707,7 @@ export function createYoutubeMcpServer(
             "language",
             "include_text",
             "include_timestamps",
+            "include_available_languages",
           ]);
           const language =
             (stringFilter(normalized, "language") ?? locale.trim()) || undefined;
@@ -707,12 +717,18 @@ export function createYoutubeMcpServer(
             "include_timestamps",
             true,
           );
+          const includeAvailableLanguages = booleanFilter(
+            normalized,
+            "include_available_languages",
+            false,
+          );
           const cursorFilters = {
             videoId,
             view,
             language: language ?? null,
             includeText,
             includeTimestamps,
+            includeAvailableLanguages,
           };
           const pageOffset = offset(
             codec,
@@ -728,11 +744,21 @@ export function createYoutubeMcpServer(
             includeTimestamps,
           });
           const resultRecord = record(result);
-          const transcriptData = without(resultRecord, [
-            "segments",
-            "nextOffset",
-            "warnings",
-          ]);
+          const availableLanguages = Array.isArray(resultRecord.availableLanguages)
+            ? resultRecord.availableLanguages
+            : [];
+          const transcriptData = {
+            ...without(resultRecord, [
+              "segments",
+              "nextOffset",
+              "warnings",
+              "availableLanguages",
+            ]),
+            availableLanguageCount: availableLanguages.length,
+            ...(includeAvailableLanguages && pageOffset === 0
+              ? { availableLanguages }
+              : {}),
+          };
           const capped = capTranscriptPayload(
             transcriptData,
             result.segments,
@@ -748,15 +774,17 @@ export function createYoutubeMcpServer(
               : nextCursor(codec, "youtube_video_get", cursorFilters, {
                   offset: continuationOffset,
                 });
-          const sourceRecord = capped.warning
-            ? {
-                ...resultRecord,
-                warnings: [
-                  ...stringArray(resultRecord.warnings),
-                  capped.warning,
-                ],
-              }
-            : resultRecord;
+          const transcriptWarnings = [
+            ...stringArray(resultRecord.warnings),
+            ...(capped.warning ? [capped.warning] : []),
+            ...(includeAvailableLanguages && pageOffset > 0
+              ? ["availableLanguages is returned only on the first transcript page."]
+              : []),
+          ];
+          const sourceRecord = {
+            ...resultRecord,
+            warnings: transcriptWarnings,
+          };
           return payload(
             "collection",
             capped.data,
@@ -1003,7 +1031,7 @@ export function createYoutubeMcpServer(
             strategy === "search"
               ? { data: 1, search: 1 }
               : { data: 2, search: 0 },
-            ["data.channel.title", "data.channel.description", "items[].title", "items[].description"],
+            ["data.channel.title", "data.channel.description", "items[].title", "items[].description", "items[].channelTitle"],
             config,
           );
         }
@@ -1098,7 +1126,7 @@ export function createYoutubeMcpServer(
           null,
           result,
           { data: 1, search: 0 },
-          ["items[].title", "items[].description", "items[].tags"],
+          ["items[].title", "items[].description", "items[].tags", "items[].channelTitle"],
           config,
         );
       }, config.maxResultBytes),
@@ -1188,7 +1216,9 @@ export function createYoutubeMcpServer(
           `youtube://entity/playlist/${playlistId}`,
           record(result.playlist),
           { data: includeItems ? 2 : 1, search: 0 },
-          ["data.playlist.title", "data.playlist.description", "items[].title", "items[].description"],
+          includeItems
+            ? ["data.playlist.title", "data.playlist.description", "data.playlist.channelTitle", "items[].title", "items[].description", "items[].channelTitle"]
+            : ["data.title", "data.description", "data.channelTitle"],
           config,
         );
       }, config.maxResultBytes),

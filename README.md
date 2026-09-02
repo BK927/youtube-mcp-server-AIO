@@ -13,7 +13,7 @@ It supports local stdio and Google Cloud Run Streamable HTTP. Steam remains a se
 | `youtube_channel_get` | Profile, statistics, branding, and uploads-playlist selections |
 | `youtube_playlist_get` | Playlist metadata and a signed page of items |
 
-All tools are read-only and idempotent. Responses share a bounded envelope with provider provenance, quota cost, freshness, warnings, untrusted-field markers, and opaque signed cursors. The default result budget is 12,288 bytes, the hard maximum is 32,768 bytes, and cursors expire after 86,400 seconds.
+All tools are read-only and idempotent. Responses share a bounded envelope with provider provenance, quota cost, freshness, warnings, untrusted-field markers, and opaque signed cursors. The default result budget is 12,288 bytes, the hard maximum is 32,768 bytes, and cursors expire after 86,400 seconds. Transcript pages return only `availableLanguageCount` by default; set `options.include_available_languages=true` to include the full language list on page one without repeating it on cursor pages. Channel-controlled titles are marked untrusted in video, search, and playlist responses.
 
 ## Providers
 

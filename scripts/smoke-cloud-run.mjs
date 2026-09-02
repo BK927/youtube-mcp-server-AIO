@@ -103,6 +103,65 @@ try {
         `transcript matrix failed: ${JSON.stringify({ transcriptSuccesses, transcriptFailures })}`,
       );
     }
+
+    const languageVideo = transcriptSuccesses[0];
+    const defaultLanguagePage = await client.callTool({
+      name: "youtube_video_get",
+      arguments: {
+        video: languageVideo,
+        view: "transcript",
+        limit: 1,
+        max_chars: 4_000,
+      },
+    });
+    const defaultLanguageEnvelope = object(defaultLanguagePage.structuredContent);
+    const defaultLanguageData = object(defaultLanguageEnvelope.data);
+    if (
+      defaultLanguagePage.isError ||
+      "availableLanguages" in defaultLanguageData ||
+      typeof defaultLanguageData.availableLanguageCount !== "number"
+    ) {
+      throw new Error("compact transcript language metadata smoke failed");
+    }
+
+    const explicitLanguagePage = await client.callTool({
+      name: "youtube_video_get",
+      arguments: {
+        video: languageVideo,
+        view: "transcript",
+        options: { include_available_languages: true },
+        limit: 1,
+        max_chars: 4_000,
+      },
+    });
+    const explicitLanguageEnvelope = object(explicitLanguagePage.structuredContent);
+    const explicitLanguageData = object(explicitLanguageEnvelope.data);
+    const explicitCursor = object(explicitLanguageEnvelope.page).next_cursor;
+    if (
+      explicitLanguagePage.isError ||
+      array(explicitLanguageData.availableLanguages).length === 0 ||
+      !nonEmpty(explicitCursor)
+    ) {
+      throw new Error("opt-in transcript language metadata smoke failed");
+    }
+    const continuedLanguagePage = await client.callTool({
+      name: "youtube_video_get",
+      arguments: {
+        video: languageVideo,
+        view: "transcript",
+        options: { include_available_languages: true },
+        cursor: explicitCursor,
+        limit: 1,
+        max_chars: 4_000,
+      },
+    });
+    const continuedLanguageEnvelope = object(continuedLanguagePage.structuredContent);
+    if (
+      continuedLanguagePage.isError ||
+      "availableLanguages" in object(continuedLanguageEnvelope.data)
+    ) {
+      throw new Error("transcript cursor repeated availableLanguages");
+    }
   }
 
   const defaultComments = await client.callTool({

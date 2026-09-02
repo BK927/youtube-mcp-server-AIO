@@ -346,7 +346,8 @@ describe("MCP protocol surface", () => {
       ).toBeLessThanOrEqual(12_288);
       const envelope = result.structuredContent as {
         data: {
-          availableLanguages: string[];
+          availableLanguageCount: number;
+          availableLanguages?: string[];
           truncation?: {
             truncated: boolean;
             reason: string;
@@ -363,7 +364,8 @@ describe("MCP protocol surface", () => {
       expect(envelope.page.returned).toBe(envelope.items.length);
       expect(envelope.page.has_more).toBe(true);
       expect(envelope.page.next_cursor).toBeTruthy();
-      expect(envelope.data.availableLanguages).toEqual(["en"]);
+      expect(envelope.data.availableLanguageCount).toBe(1);
+      expect(envelope.data.availableLanguages).toBeUndefined();
       expect(envelope.data.truncation).toMatchObject({
         truncated: true,
         reason: "max_chars",
@@ -383,6 +385,45 @@ describe("MCP protocol surface", () => {
       ).toBe(true);
       expect(envelope.meta.warnings).toContain(
         "Transcript text was bounded to max_chars; structural fields remain intact and next_cursor continues at the first omitted segment.",
+      );
+
+      const withLanguages = await client.callTool({
+        name: "youtube_video_get",
+        arguments: {
+          video: "dQw4w9WgXcQ",
+          view: "transcript",
+          options: { include_available_languages: true },
+          limit: 50,
+          max_chars: 256,
+        },
+      });
+      expect(
+        (withLanguages.structuredContent as {
+          data: { availableLanguages?: string[] };
+        }).data.availableLanguages,
+      ).toEqual(["en"]);
+      const languagePage = withLanguages.structuredContent as {
+        page: { next_cursor: string | null };
+      };
+      const continued = await client.callTool({
+        name: "youtube_video_get",
+        arguments: {
+          video: "dQw4w9WgXcQ",
+          view: "transcript",
+          options: { include_available_languages: true },
+          cursor: languagePage.page.next_cursor,
+          limit: 50,
+          max_chars: 256,
+        },
+      });
+      const continuedEnvelope = continued.structuredContent as {
+        data: { availableLanguages?: string[]; availableLanguageCount: number };
+        meta: { warnings: string[] };
+      };
+      expect(continuedEnvelope.data.availableLanguages).toBeUndefined();
+      expect(continuedEnvelope.data.availableLanguageCount).toBe(1);
+      expect(continuedEnvelope.meta.warnings).toContain(
+        "availableLanguages is returned only on the first transcript page.",
       );
     } finally {
       await client.close();
