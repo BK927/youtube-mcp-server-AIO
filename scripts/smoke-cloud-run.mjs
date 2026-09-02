@@ -44,6 +44,8 @@ function errorSummary(result) {
   const details = object(envelope.details);
   return {
     code: envelope.code ?? "unknown",
+    retryable: envelope.retryable ?? null,
+    blockedBy: details.blockedBy ?? null,
     attempts: array(details.attempts).map((attempt) => {
       const value = object(attempt);
       return {
