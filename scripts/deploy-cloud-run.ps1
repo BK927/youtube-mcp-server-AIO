@@ -134,7 +134,9 @@ function Deploy-Candidate {
   )
   if ($NoTraffic) { $arguments += "--no-traffic" }
   $arguments += @(
-    "--container", "mcp",
+    # Keep the existing unnamed ingress container as the primary container when
+    # converting the service to multi-container. Naming a new ingress container
+    # would retain the old one and leave two containers with exposed ports.
     "--image", $immutableImage,
     "--port", "8080",
     "--cpu", "1",
@@ -144,7 +146,6 @@ function Deploy-Candidate {
     "--set-secrets", $secretValues,
     "--container", "pot-provider",
     "--image", $PotProviderImage,
-    "--port", "default",
     "--cpu", "0.25",
     "--memory", "512Mi",
     "--startup-probe", "httpGet.path=/ping,httpGet.port=4416,initialDelaySeconds=0,timeoutSeconds=2,periodSeconds=2,failureThreshold=20"
