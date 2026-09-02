@@ -70,6 +70,7 @@ assert 'YT_DLP_POT_PROVIDER_ENABLED = "true"' in deployment
 assert '"--env-vars-file", $environmentFile' in deployment
 assert '"--container", "mcp"' in deploy
 assert '"--container", "pot-provider"' in deploy
+assert '"--port", "default"' in deploy
 assert '"--depends-on", "pot-provider"' in deploy
 assert "brainicism/bgutil-ytdlp-pot-provider@sha256:" in deploy
 assert '--videos ($SmokeVideoIds -join ",")' in deploy

@@ -144,6 +144,7 @@ function Deploy-Candidate {
     "--set-secrets", $secretValues,
     "--container", "pot-provider",
     "--image", $PotProviderImage,
+    "--port", "default",
     "--cpu", "0.25",
     "--memory", "512Mi",
     "--startup-probe", "httpGet.path=/ping,httpGet.port=4416,initialDelaySeconds=0,timeoutSeconds=2,periodSeconds=2,failureThreshold=20"
