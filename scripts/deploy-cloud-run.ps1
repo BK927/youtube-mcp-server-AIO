@@ -128,6 +128,9 @@ function Invoke-RunServicePatch {
   $uri = "https://run.googleapis.com/v2/projects/$ProjectId/locations/$Region/services/$ServiceName`?$query"
   $json = $Body | ConvertTo-Json -Depth 30 -Compress
   $operation = Invoke-RestMethod -Uri $uri -Method Patch -Headers $headers -ContentType "application/json" -Body $json
+  # validateOnly operations are ephemeral and cannot be polled through the
+  # operations collection. A successful PATCH response is the validation result.
+  if ($ValidateOnly) { return $operation }
   return Wait-RunOperation $operation $headers
 }
 
