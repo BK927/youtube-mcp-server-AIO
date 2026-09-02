@@ -14,14 +14,17 @@ for (let index = 2; index < process.argv.length; index += 2) {
   args.set(process.argv[index], process.argv[index + 1]);
 }
 const url = args.get("--url");
+const skipTranscripts = args.get("--skip-transcripts") === "true";
 const videos = (args.get("--videos") ?? "dQw4w9WgXcQ,arj7oStGLkU,iG9CE55wbtY")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
 const researchVideos = new Set(["arj7oStGLkU", "iG9CE55wbtY"]);
 const token = process.env.MCP_SMOKE_ACCESS_TOKEN;
-if (!url || !token || videos.length < 2) {
-  throw new Error("--url, at least two --videos, and MCP_SMOKE_ACCESS_TOKEN are required");
+if (!url || !token || (!skipTranscripts && videos.length < 2)) {
+  throw new Error(
+    "--url, MCP_SMOKE_ACCESS_TOKEN, and at least two --videos unless --skip-transcripts true are required",
+  );
 }
 
 function object(value) {
@@ -67,35 +70,37 @@ try {
 
   const transcriptSuccesses = [];
   const transcriptFailures = [];
-  for (const video of videos) {
-    const result = await client.callTool({
-      name: "youtube_video_get",
-      arguments: {
-        video,
-        view: "transcript",
-        options: { include_text: false, include_timestamps: true },
-        limit: 1,
-        max_chars: 4_000,
-      },
-    });
-    const envelope = object(result.structuredContent);
-    if (
-      !result.isError &&
-      array(envelope.items).length === 1 &&
-      nonEmpty(object(array(envelope.items)[0]).text)
-    ) {
-      transcriptSuccesses.push(video);
-    } else {
-      transcriptFailures.push({ video, ...errorSummary(result) });
+  if (!skipTranscripts) {
+    for (const video of videos) {
+      const result = await client.callTool({
+        name: "youtube_video_get",
+        arguments: {
+          video,
+          view: "transcript",
+          options: { include_text: false, include_timestamps: true },
+          limit: 1,
+          max_chars: 4_000,
+        },
+      });
+      const envelope = object(result.structuredContent);
+      if (
+        !result.isError &&
+        array(envelope.items).length === 1 &&
+        nonEmpty(object(array(envelope.items)[0]).text)
+      ) {
+        transcriptSuccesses.push(video);
+      } else {
+        transcriptFailures.push({ video, ...errorSummary(result) });
+      }
     }
-  }
-  const researchSuccesses = transcriptSuccesses.filter((video) =>
-    researchVideos.has(video),
-  );
-  if (transcriptSuccesses.length < 2 || researchSuccesses.length < 1) {
-    throw new Error(
-      `transcript matrix failed: ${JSON.stringify({ transcriptSuccesses, transcriptFailures })}`,
+    const researchSuccesses = transcriptSuccesses.filter((video) =>
+      researchVideos.has(video),
     );
+    if (transcriptSuccesses.length < 2 || researchSuccesses.length < 1) {
+      throw new Error(
+        `transcript matrix failed: ${JSON.stringify({ transcriptSuccesses, transcriptFailures })}`,
+      );
+    }
   }
 
   const defaultComments = await client.callTool({
@@ -174,7 +179,9 @@ try {
   }
 
   console.log(
-    `YouTube MCP SDK smoke passed: exact 4 tools, ${transcriptSuccesses.length}/${videos.length} transcript matrix with research coverage, bounded comments/replies, and locale-region inference.`,
+    skipTranscripts
+      ? "YouTube MCP SDK targeted smoke passed: exact 4 tools, bounded comments/replies, and locale-region inference."
+      : `YouTube MCP SDK smoke passed: exact 4 tools, ${transcriptSuccesses.length}/${videos.length} transcript matrix with research coverage, bounded comments/replies, and locale-region inference.`,
   );
 } finally {
   await client.close();

@@ -67,10 +67,26 @@ export class TranscriptProviderChain {
       }
     }
 
+    const blockedByYouTube = attempts.some(
+      (attempt) => attempt.blockedBy === "youtube_bot_challenge",
+    );
     throw new YouTubeMcpError(
       "PROVIDER_UNAVAILABLE",
-      "Configured public transcript providers could not retrieve this video.",
-      { videoId: request.videoId, attempts },
+      blockedByYouTube
+        ? "YouTube blocked transcript retrieval from this server environment. Retrying from the same server is unlikely to help."
+        : "Configured public transcript providers could not retrieve this video.",
+      {
+        videoId: request.videoId,
+        attempts,
+        ...(blockedByYouTube
+          ? {
+              blockedBy: "youtube_bot_challenge",
+              remediation:
+                "Configure a managed transcript provider or an approved rotating residential proxy.",
+            }
+          : {}),
+      },
+      blockedByYouTube ? false : undefined,
     );
   }
 }

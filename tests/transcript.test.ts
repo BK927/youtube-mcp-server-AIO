@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { YouTubeMcpError } from "../src/errors.js";
+import { YouTubeMcpError, errorPayload } from "../src/errors.js";
 import { TranscriptProviderChain } from "../src/providers/transcript/provider-chain.js";
 import {
   makeTranscriptSegment,
@@ -81,11 +81,15 @@ describe("transcript parsing and search", () => {
       },
     ]);
 
-    await expect(
-      chain.fetchTranscript({ videoId, language: "en" }),
-    ).rejects.toMatchObject({
+    const error = await chain
+      .fetchTranscript({ videoId, language: "en" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
       code: "PROVIDER_UNAVAILABLE",
+      retryable: false,
       details: {
+        blockedBy: "youtube_bot_challenge",
         attempts: [
           {
             provider: "yt-dlp",
@@ -94,6 +98,13 @@ describe("transcript parsing and search", () => {
             blockedBy: "youtube_bot_challenge",
           },
         ],
+      },
+    });
+    expect(errorPayload(error)).toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+      retryable: false,
+      details: {
+        blockedBy: "youtube_bot_challenge",
       },
     });
   });
