@@ -143,7 +143,7 @@ function Deploy-Candidate {
     MCP_ALLOW_UNAUTHENTICATED = "false"
     PUBLIC_BASE_URL = $PublicBaseUrl
     MCP_ALLOWED_HOSTS = $AllowedHosts
-    MCP_OAUTH_ENABLED = $oauthEnabled
+    MCP_OAUTH_ENABLED = "true"
     MCP_OAUTH_ISSUER = $PublicBaseUrl
     MCP_OAUTH_RESOURCE = "$PublicBaseUrl/mcp"
     MCP_OAUTH_SCOPE = "youtube.read"
