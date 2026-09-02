@@ -72,6 +72,7 @@ assert 'ValidateOnly' in deploy
 assert 'name = "pot-provider"' in deploy
 assert 'name = "mcp"' in deploy
 assert 'dependsOn = @("pot-provider")' in deploy
+assert "[REDACTED]" in deploy and "poToken" in deploy and "integrityToken" in deploy
 assert 'percent = 0; tag = "candidate"' in deploy
 assert 'percent = 100' in deploy
 assert "brainicism/bgutil-ytdlp-pot-provider@sha256:" in deploy
@@ -79,6 +80,9 @@ assert '--videos ($SmokeVideoIds -join ",")' in deploy
 assert "arj7oStGLkU" in deploy and "iG9CE55wbtY" in deploy
 assert "Get-StableRevision" in deploy
 assert 'secret = "youtube-mcp-cursor-secret"; version = $cursorSecretVersion' in deployment
+
+ytdlp_provider = (ROOT / "src" / "providers" / "transcript" / "ytdlp-provider.ts").read_text(encoding="utf-8")
+assert "youtube:player_client=web,mweb,web_safari,tv" in ytdlp_provider
 
 for path in [ROOT / ".env.example", ROOT / "README.md", ROOT / "src", ROOT / "scripts"]:
     files = [path] if path.is_file() else [p for p in path.rglob("*") if p.is_file()]

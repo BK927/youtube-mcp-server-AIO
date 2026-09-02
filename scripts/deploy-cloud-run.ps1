@@ -194,6 +194,12 @@ function Deploy-Candidate {
         [ordered]@{
           name = "pot-provider"
           image = $PotProviderImage
+          command = @("/usr/local/bin/node")
+          args = @(
+            "--input-type=module",
+            "--eval",
+            'const redact=(value)=>typeof value==="string"?value.replace(/(poToken:\s*)\S+/gu,"$1[REDACTED]").replace(/("integrityToken"\s*:\s*")[^"]+/gu,"$1[REDACTED]"):value; for (const method of ["log","debug"]) { const original=console[method].bind(console); console[method]=(...args)=>original(...args.map(redact)); } await import("./build/main.js");'
+          )
           resources = [ordered]@{ limits = [ordered]@{ cpu = "0.25"; memory = "512Mi" }; cpuIdle = $true; startupCpuBoost = $true }
           startupProbe = [ordered]@{ timeoutSeconds = 2; periodSeconds = 2; failureThreshold = 30; httpGet = @{ path = "/ping"; port = 4416 } }
         }
