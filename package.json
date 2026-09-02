@@ -1,6 +1,6 @@
 {
   "name": "youtube-mcp-server-aio",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Evidence-first, quota-aware all-in-one YouTube MCP server",
   "type": "module",
   "bin": {

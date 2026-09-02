@@ -21,7 +21,7 @@ if (!url || !token) {
   throw new Error("--url and MCP_SMOKE_ACCESS_TOKEN are required");
 }
 
-const client = new Client({ name: "youtube-cloud-smoke", version: "1.1.0" });
+const client = new Client({ name: "youtube-cloud-smoke", version: "1.1.1" });
 const transport = new StreamableHTTPClientTransport(new URL(url), {
   authProvider: { token: async () => token },
 });

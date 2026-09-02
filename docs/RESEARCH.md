@@ -46,7 +46,7 @@ The project uses the split stable v2 packages rather than the old monolithic v1 
 - [MCP TypeScript SDK repository](https://github.com/modelcontextprotocol/typescript-sdk)
 - [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28)
 
-Version 1.1.0 supports both local stdio and stateless Streamable HTTP. Private remote access uses a fixed bearer while shared multi-user authorization remains outside this release.
+Version 1.1.1 supports both local stdio and stateless Streamable HTTP. Private remote access uses a fixed bearer while shared multi-user authorization remains outside this release.
 
 ### YouTube Data API quota model
 

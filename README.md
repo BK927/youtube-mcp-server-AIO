@@ -1,6 +1,6 @@
 # YouTube MCP AIO
 
-YouTube MCP AIO 1.1.0 is a read-only research server with four task-oriented tools. The small surface is deliberate: video metadata, transcripts, comments, search, channels, playlists, and trending data are exposed through coherent views instead of many low-level API tools.
+YouTube MCP AIO 1.1.1 is a read-only research server with four task-oriented tools. The small surface is deliberate: video metadata, transcripts, comments, search, channels, playlists, and trending data are exposed through coherent views instead of many low-level API tools.
 
 It supports local stdio and Google Cloud Run Streamable HTTP. Steam remains a separate plugin and service so YouTube schemas are absent when they are irrelevant.
 

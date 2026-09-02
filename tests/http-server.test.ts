@@ -33,7 +33,7 @@ describe("Streamable HTTP server", () => {
     expect(await health.json()).toMatchObject({
       ok: true,
       service: "youtube-mcp-aio",
-      version: "1.1.0",
+      version: "1.1.1",
     });
 
     const unauthorized = await fetch(`${handle.localUrl}/mcp`);
@@ -197,6 +197,15 @@ describe("Streamable HTTP server", () => {
     expect(loginUrl).toBeTruthy();
     const transaction = new URL(loginUrl!).searchParams.get("transaction");
     expect(transaction).toBeTruthy();
+
+    const loginPage = await fetch(loginUrl!);
+    expect(loginPage.status).toBe(200);
+    expect(loginPage.headers.get("content-security-policy")).toContain(
+      "form-action 'self' https://chatgpt.com",
+    );
+    expect(loginPage.headers.get("content-security-policy")).not.toContain(
+      "form-action *",
+    );
 
     const login = await fetch(`${issuer}/oauth/login`, {
       method: "POST",
