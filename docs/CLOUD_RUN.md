@@ -7,7 +7,8 @@ This is the fixed Google Cloud production profile for YouTube MCP AIO 1.1.1. No 
 | Resource | Name/default | Region and capacity | Exposure |
 | --- | --- | --- | --- |
 | Artifact Registry | `mcp/youtube-mcp-aio` | `asia-northeast1` | private |
-| Cloud Run | `youtube-mcp-aio` | 1 vCPU, 1 GiB, concurrency 4, timeout 300 s, min 0, max 2 | public ingress; bearer required at `/mcp` |
+| Cloud Run ingress | `youtube-mcp-aio` / `mcp` | 1 vCPU, 1 GiB, concurrency 4, timeout 300 s, min 0, max 2 | public ingress; bearer or OAuth required at `/mcp` |
+| Cloud Run sidecar | `pot-provider` | 0.25 vCPU, 512 MiB per service instance | localhost-only PO-token minting for `yt-dlp` |
 | Firestore | `(default)` / `youtube_quota` | Native mode, `asia-northeast1` | runtime identity only |
 | API key | `youtube-mcp-aio-v1` | restricted to `youtube.googleapis.com` | Secret Manager injection only |
 
@@ -30,6 +31,7 @@ The main Cloud Run URL is public because private Codex clients need to reach it;
 
 - Node base: `node:24.12.0-bookworm-slim` plus its verified multi-platform index digest.
 - `yt-dlp`: `2026.8.19`, installed in an isolated Python virtual environment.
+- `bgutil-ytdlp-pot-provider`: Python plugin `1.3.1`; provider sidecar `1.3.1` pinned by its immutable multi-platform digest.
 - JavaScript dependencies: `npm ci` from `package-lock.json`; runtime install uses the frozen lock with dev dependencies omitted.
 
 The upstream Debian packages installed by `apt` are not snapshot-pinned. Rebuilding an old commit can therefore receive later Debian security package revisions even though the base index and application dependencies are fixed. This limitation is documented rather than masked by an invented digest.
@@ -69,7 +71,7 @@ The script:
 3. resolves the Artifact Registry `sha256` digest;
 4. deploys `IMAGE@DIGEST` as tag `candidate` with `--no-traffic`;
 5. pins exact stable and candidate Host allowlists;
-6. checks candidate `/health`, OAuth authorization/resource discovery, and unauthenticated `401`, then uses the pinned MCP client to negotiate protocol/SSE, require the exact four-tool list with no legacy names, and complete a representative keyless transcript call against the candidate URL;
+6. checks candidate `/health`, OAuth authorization/resource discovery, and unauthenticated `401`, then uses the pinned MCP client to require the exact four-tool list, pass at least two of three transcript probes including one research/TED video, verify structurally intact bounded comments/replies, and verify `ko-KR` trending-region inference;
 7. leaves the candidate at 0% unless `-Promote` is supplied.
 
 To smoke and promote to 100% in one approved run:
@@ -139,4 +141,4 @@ The rollback changes traffic without rebuilding. A revision retains its digest a
 - Alert on 5xx, latency, instance saturation, Firestore transaction errors, quota exhaustion, Data API errors, and transcript-provider failure rates.
 - Keep the YouTube API restriction, Firestore delete protection, exact Host allowlist, and service-specific secret IAM under drift review.
 - Do not log API keys, bearer headers, signed cursors, or raw comments/transcripts at request level.
-- `yt-dlp` and YouTube.js depend on unofficial public interfaces and can fail because of upstream changes, IP reputation, region, or video restrictions. Provider failures remain explicit.
+- `yt-dlp`, its PO-token provider, and YouTube.js depend on unofficial public interfaces and can still fail because of upstream changes, IP reputation, region, or video restrictions. Provider failures remain explicit and classify detected bot challenges in `details.attempts`.

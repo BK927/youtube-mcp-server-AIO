@@ -168,6 +168,7 @@ export class YtDlpTranscriptProvider implements TranscriptProvider {
     private readonly executable: string,
     private readonly defaultLanguage: string,
     private readonly timeoutMs: number,
+    private readonly potProviderEnabled = false,
   ) {}
 
   isAvailable(): Promise<boolean> {
@@ -192,15 +193,27 @@ export class YtDlpTranscriptProvider implements TranscriptProvider {
     }
 
     const videoUrl = `https://www.youtube.com/watch?v=${request.videoId}`;
+    const args = [
+      "--dump-single-json",
+      "--skip-download",
+      "--no-warnings",
+      "--no-playlist",
+    ];
+    if (this.potProviderEnabled) {
+      args.push(
+        "--js-runtimes",
+        "node",
+        "--extractor-args",
+        "youtube:player_client=web_embedded,tv,android_vr,web",
+        "--extractor-args",
+        "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
+      );
+    }
+    args.push(videoUrl);
+
     const { stdout } = await runProcess(
       this.executable,
-      [
-        "--dump-single-json",
-        "--skip-download",
-        "--no-warnings",
-        "--no-playlist",
-        videoUrl,
-      ],
+      args,
       Math.max(this.timeoutMs, 30_000),
     );
 

@@ -41,11 +41,11 @@ const TOOL_SCHEMAS: Record<string, unknown> = {
       view: ["metadata", "transcript", "comments"],
       options: {
         transcript: ["language", "include_text", "include_timestamps"],
-        comments: ["order", "include_replies"],
+        comments: ["order", "include_replies", "reply_limit"],
       },
       cursor: "opaque signed cursor",
       limit: "1..100",
-      max_chars: "256..12000",
+      max_chars: "256..12000 content-text budget; structural fields remain intact",
       locale: "preferred language code",
     },
   },
@@ -54,7 +54,10 @@ const TOOL_SCHEMAS: Record<string, unknown> = {
       scope: ["global", "channel", "transcript", "trending"],
       query: "required for global/transcript; optional for channel",
       within: "channel for channel scope; video for transcript scope",
-      filters: "scope-specific filter object",
+      filters: {
+        trending: ["region", "category_id"],
+        note: "filters.region overrides an explicit locale region such as ko-KR",
+      },
       cursor: "opaque signed cursor",
       limit: "1..100",
       locale: "preferred language code",
@@ -206,6 +209,31 @@ function timeFilter(
   return value;
 }
 
+function regionFilter(
+  filters: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = stringFilter(filters, key);
+  if (!value) return undefined;
+  if (!/^[a-z]{2}$/iu.test(value)) {
+    throw new YouTubeMcpError(
+      "INVALID_ARGUMENT",
+      `${key} must be a two-letter ISO 3166-1 region code.`,
+    );
+  }
+  return value.toUpperCase();
+}
+
+function regionFromLocale(locale: string): string | undefined {
+  const value = locale.trim();
+  if (!value) return undefined;
+  try {
+    return new Intl.Locale(value.replaceAll("_", "-")).region?.toUpperCase();
+  } catch {
+    return undefined;
+  }
+}
+
 function pageToken(
   codec: CursorCodec,
   cursor: string | undefined,
@@ -289,6 +317,135 @@ function capPayloadText(
   return {
     data: visit(data),
     items: visit(items) as unknown[],
+  };
+}
+
+interface CappedComments {
+  data: Record<string, unknown>;
+  items: unknown[];
+  warning: string | undefined;
+}
+
+function capText(value: string, limit: number): {
+  text: string;
+  truncated: boolean;
+} {
+  if (value.length <= limit) return { text: value, truncated: false };
+  if (limit >= 4) {
+    return { text: `${value.slice(0, limit - 3)}...`, truncated: true };
+  }
+  return { text: value.slice(0, Math.max(1, limit)), truncated: true };
+}
+
+function capCommentPayload(
+  data: Record<string, unknown>,
+  inputItems: unknown[],
+  maxChars: number,
+): CappedComments {
+  const validThreads = inputItems.flatMap((item) => {
+    const thread = record(item);
+    const topLevel = record(thread.topLevelComment);
+    const id = typeof topLevel.id === "string" ? topLevel.id.trim() : "";
+    const text = typeof topLevel.text === "string" ? topLevel.text.trim() : "";
+    return id && text ? [{ thread, topLevel, text }] : [];
+  });
+  const omittedItems = inputItems.length - validThreads.length;
+  const primaryBudget = Math.max(
+    validThreads.length,
+    Math.floor(maxChars * 0.65),
+  );
+  let primaryRemaining = primaryBudget;
+  let textCharsReturned = 0;
+  let truncatedTextFields = 0;
+
+  const prepared = validThreads.map((entry, index) => {
+    const share = Math.max(
+      1,
+      Math.floor(primaryRemaining / (validThreads.length - index)),
+    );
+    const capped = capText(entry.text, share);
+    primaryRemaining -= capped.text.length;
+    textCharsReturned += capped.text.length;
+    if (capped.truncated) truncatedTextFields += 1;
+    const rawReplies = Array.isArray(entry.thread.replies)
+      ? entry.thread.replies
+      : [];
+    return {
+      thread: {
+        ...entry.thread,
+        topLevelComment: {
+          ...entry.topLevel,
+          text: capped.text,
+          ...(capped.truncated ? { textTruncated: true } : {}),
+        },
+      },
+      rawReplies,
+      replies: [] as Record<string, unknown>[],
+    };
+  });
+
+  const totalReplies = prepared.reduce(
+    (total, entry) => total + entry.rawReplies.length,
+    0,
+  );
+  let replyRemaining = Math.max(0, maxChars - textCharsReturned);
+  let repliesVisited = 0;
+  let omittedReplies = 0;
+
+  for (const entry of prepared) {
+    for (const value of entry.rawReplies) {
+      const reply = record(value);
+      const id = typeof reply.id === "string" ? reply.id.trim() : "";
+      const text = typeof reply.text === "string" ? reply.text.trim() : "";
+      const repliesLeft = totalReplies - repliesVisited;
+      repliesVisited += 1;
+      if (!id || !text || replyRemaining <= 0) {
+        omittedReplies += 1;
+        continue;
+      }
+      const share = Math.max(1, Math.floor(replyRemaining / repliesLeft));
+      const capped = capText(text, share);
+      replyRemaining -= capped.text.length;
+      textCharsReturned += capped.text.length;
+      if (capped.truncated) truncatedTextFields += 1;
+      entry.replies.push({
+        ...reply,
+        text: capped.text,
+        ...(capped.truncated ? { textTruncated: true } : {}),
+      });
+    }
+  }
+
+  const items = prepared.map((entry) => ({
+    ...entry.thread,
+    replies: entry.replies,
+    repliesReturned: entry.replies.length,
+    repliesComplete:
+      record(entry.thread).repliesComplete === true &&
+      entry.replies.length === entry.rawReplies.length,
+  }));
+  const truncated =
+    omittedItems > 0 || omittedReplies > 0 || truncatedTextFields > 0;
+  if (!truncated) return { data, items, warning: undefined };
+
+  return {
+    data: {
+      ...data,
+      truncation: {
+        truncated: true,
+        reason: "max_chars",
+        max_chars: maxChars,
+        original_items: inputItems.length,
+        returned_items: items.length,
+        omitted_items: omittedItems,
+        omitted_replies: omittedReplies,
+        truncated_text_fields: truncatedTextFields,
+        text_chars_returned: textCharsReturned,
+      },
+    },
+    items,
+    warning:
+      "Comment text or replies were shortened to the requested max_chars budget; identity and timestamp fields were preserved.",
   };
 }
 
@@ -497,16 +654,36 @@ export function createYoutubeMcpServer(
           );
         }
 
-        const normalized = checkedFilters(options, ["order", "include_replies"]);
+        const normalized = checkedFilters(options, [
+          "order",
+          "include_replies",
+          "reply_limit",
+        ]);
         const order = enumFilter(normalized, "order", ["relevance", "time"], "relevance");
-        const includeReplies = booleanFilter(normalized, "include_replies", true);
-        const cursorFilters = { videoId, view, order, includeReplies };
+        const includeReplies = booleanFilter(normalized, "include_replies", false);
+        if (!includeReplies && normalized.reply_limit !== undefined) {
+          throw new YouTubeMcpError(
+            "INVALID_ARGUMENT",
+            "reply_limit requires include_replies=true.",
+          );
+        }
+        const replyLimit = includeReplies
+          ? integerFilter(normalized, "reply_limit", 3, 0, 20)
+          : 0;
+        const cursorFilters = {
+          videoId,
+          view,
+          order,
+          includeReplies,
+          replyLimit,
+        };
         const result = await service.listComments(
           videoId,
           limit,
           pageToken(codec, cursor, "youtube_video_get", cursorFilters),
           order,
           includeReplies,
+          replyLimit,
         );
         const items = Array.isArray(result.items) ? result.items : [];
         const next =
@@ -515,17 +692,37 @@ export function createYoutubeMcpServer(
                 pageToken: result.nextPageToken,
               })
             : null;
+        const commentData = without(result, [
+          "items",
+          "nextPageToken",
+          "prevPageToken",
+          "warnings",
+        ]);
+        const capped = capCommentPayload(commentData, items, maxChars);
+        const sourceRecord = capped.warning
+          ? {
+              ...result,
+              warnings: [
+                ...stringArray(result.warnings),
+                capped.warning,
+              ],
+            }
+          : result;
         return payload(
           "collection",
-          without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]),
-          items,
+          capped.data,
+          capped.items,
           next,
           canonicalUri,
-          result,
+          sourceRecord,
           { data: 1, search: 0 },
-          ["items[].author.name", "items[].topLevelComment.text", "items[].replies[].text"],
+          [
+            "items[].topLevelComment.author.name",
+            "items[].topLevelComment.text",
+            "items[].replies[].author.name",
+            "items[].replies[].text",
+          ],
           config,
-          maxChars,
         );
       }, config.maxResultBytes),
   );
@@ -573,7 +770,7 @@ export function createYoutubeMcpServer(
             channelId: stringFilter(normalized, "channel_id"),
             publishedAfter: stringFilter(normalized, "published_after"),
             publishedBefore: stringFilter(normalized, "published_before"),
-            regionCode: stringFilter(normalized, "region"),
+            regionCode: regionFilter(normalized, "region"),
             relevanceLanguage:
               stringFilter(normalized, "relevance_language") || locale.trim() || undefined,
             safeSearch: enumFilter(
@@ -719,7 +916,10 @@ export function createYoutubeMcpServer(
         const normalized = checkedFilters(filters, ["region", "category_id"]);
         const trendingFilters = {
           scope,
-          regionCode: stringFilter(normalized, "region") ?? config.defaultRegion,
+          regionCode:
+            regionFilter(normalized, "region") ??
+            regionFromLocale(locale) ??
+            config.defaultRegion,
           categoryId: stringFilter(normalized, "category_id"),
         };
         const result = await service.trending(

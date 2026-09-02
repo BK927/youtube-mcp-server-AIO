@@ -101,6 +101,7 @@ export class YouTubeService {
             config.ytDlpPath,
             config.defaultLanguage,
             config.requestTimeoutMs,
+            config.ytDlpPotProviderEnabled,
           );
         }
         return new YouTubeJsTranscriptProvider(
@@ -160,6 +161,7 @@ export class YouTubeService {
         officialDataApi: Boolean(this.dataApi),
         transcriptOrder: this.transcriptChain.names,
         transcriptAvailability,
+        ytDlpPotProviderEnabled: this.config.ytDlpPotProviderEnabled,
         defaultLanguage: this.config.defaultLanguage,
         defaultRegion: this.config.defaultRegion,
       },
@@ -336,6 +338,7 @@ export class YouTubeService {
     pageToken: string | undefined,
     order: "relevance" | "time",
     includeReplies: boolean,
+    replyLimit: number,
   ): Promise<Record<string, unknown>> {
     return this.requireDataApi().listComments(
       extractVideoId(reference),
@@ -343,6 +346,7 @@ export class YouTubeService {
       pageToken,
       order,
       includeReplies,
+      replyLimit,
     );
   }
 

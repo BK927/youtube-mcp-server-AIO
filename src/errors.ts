@@ -19,12 +19,19 @@ const PUBLIC_ERROR_CODE_SET = new Set<string>(PUBLIC_ERROR_CODES);
 export class YouTubeMcpError extends Error {
   readonly code: string;
   readonly details: unknown;
+  readonly retryable: boolean | undefined;
 
-  constructor(code: string, message: string, details?: unknown) {
+  constructor(
+    code: string,
+    message: string,
+    details?: unknown,
+    retryable?: boolean,
+  ) {
     super(message);
     this.name = "YouTubeMcpError";
     this.code = code;
     this.details = details;
+    this.retryable = retryable;
   }
 }
 
@@ -60,16 +67,17 @@ export function errorPayload(
 ): Record<string, unknown> {
   const code = mappedCode(error);
   const known = error instanceof YouTubeMcpError;
+  const defaultRetryable = [
+    "PROVIDER_UNAVAILABLE",
+    "RATE_LIMITED",
+    "UPSTREAM_ERROR",
+    "TIMEOUT",
+    "JOB_NOT_READY",
+  ].includes(code);
   return {
     code,
     message: known ? error.message : "The upstream operation could not be completed.",
-    retryable: [
-      "PROVIDER_UNAVAILABLE",
-      "RATE_LIMITED",
-      "UPSTREAM_ERROR",
-      "TIMEOUT",
-      "JOB_NOT_READY",
-    ].includes(code),
+    retryable: known ? error.retryable ?? defaultRetryable : defaultRetryable,
     schema_uri: schemaUri,
     details: known ? error.details ?? {} : {},
   };

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { YouTubeMcpError, errorPayload } from "../src/errors.js";
+import { TranscriptProviderChain } from "../src/providers/transcript/provider-chain.js";
 import {
   makeTranscriptSegment,
   parseJson3Transcript,
@@ -63,5 +65,47 @@ describe("transcript parsing and search", () => {
     expect(result.matches[0]?.segmentIndex).toBe(1);
     expect(result.matches[0]?.context).toHaveLength(3);
     expect(result.matches[0]?.url).toContain("t=2s");
+  });
+
+  it("classifies exhausted providers and identifies YouTube bot challenges", async () => {
+    const chain = new TranscriptProviderChain([
+      {
+        name: "yt-dlp",
+        isAvailable: async () => true,
+        fetchTranscript: async () => {
+          throw new YouTubeMcpError(
+            "YT_DLP_FAILED",
+            "Sign in to confirm you’re not a bot",
+          );
+        },
+      },
+    ]);
+
+    const error = await chain
+      .fetchTranscript({ videoId, language: "en" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+      retryable: false,
+      details: {
+        blockedBy: "youtube_bot_challenge",
+        attempts: [
+          {
+            provider: "yt-dlp",
+            available: true,
+            code: "YT_DLP_FAILED",
+            blockedBy: "youtube_bot_challenge",
+          },
+        ],
+      },
+    });
+    expect(errorPayload(error)).toMatchObject({
+      code: "PROVIDER_UNAVAILABLE",
+      retryable: false,
+      details: {
+        blockedBy: "youtube_bot_challenge",
+      },
+    });
   });
 });
