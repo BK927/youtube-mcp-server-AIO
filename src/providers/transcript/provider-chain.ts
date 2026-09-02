@@ -54,17 +54,22 @@ export class TranscriptProviderChain {
         }
         return result;
       } catch (error) {
+        const message = errorMessage(error);
         attempts.push({
           provider: provider.name,
           available: true,
-          error: errorMessage(error),
+          error: message,
+          ...(error instanceof YouTubeMcpError ? { code: error.code } : {}),
+          ...(/sign in to confirm you(?:’re|'re| are) not a bot/iu.test(message)
+            ? { blockedBy: "youtube_bot_challenge" as const }
+            : {}),
         });
       }
     }
 
     throw new YouTubeMcpError(
-      "TRANSCRIPT_UNAVAILABLE",
-      "Every configured transcript provider failed.",
+      "PROVIDER_UNAVAILABLE",
+      "Configured public transcript providers could not retrieve this video.",
       { videoId: request.videoId, attempts },
     );
   }

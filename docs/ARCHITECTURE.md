@@ -11,6 +11,8 @@ Remote client --HTTPS + bearer--> HTTP boundary --> four MCP tools
                                          |        YouTubeService
                                          |          |       |
                                          |          |       +-> yt-dlp / YouTube.js transcripts
+                                         |          |             |
+                                         |          |             +-> localhost PO-token sidecar (Cloud only)
                                          |          +-> YouTube Data API v3
                                          |
                                          +-> /health (Cloud Run; /healthz locally)
@@ -40,7 +42,7 @@ Tool responses contain:
 - warnings and untrusted text-field paths;
 - a bounded structured error with a schema URI.
 
-Default results are limited to 12,288 bytes and hard-limited to 32,768 bytes. Video transcript/comment and playlist/search collections use opaque continuation cursors instead of returning unbounded arrays. Resource templates expose schemas and individual entities without adding more tool schemas.
+Default results are limited to 12,288 bytes and hard-limited to 32,768 bytes. Comment replies are disabled by default; when enabled, `reply_limit` and a text-aware cap preserve IDs, authors, and timestamps instead of blanking structural fields. Video transcript/comment and playlist/search collections use opaque continuation cursors instead of returning unbounded arrays. Resource templates expose schemas and individual entities without adding more tool schemas.
 
 ## State
 
@@ -68,4 +70,4 @@ HTTP mode is stateless and fail-closed: bearer authentication, exact Host allowl
 
 ## Provider and content policy
 
-Official and unofficial results keep provider names and warnings. Comments, titles, descriptions, and transcript text are untrusted content. The service does not download media, import cookies, bypass access restrictions, mutate accounts, or silently send evidence to another model provider.
+Official and unofficial results keep provider names and warnings. Comments, titles, descriptions, and transcript text are untrusted content. Cloud Run uses a pinned proof-of-origin helper to satisfy YouTube player attestation where available; it does not import browser/account cookies, download media, mutate accounts, or silently send evidence to another model provider.

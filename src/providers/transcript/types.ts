@@ -15,4 +15,6 @@ export interface TranscriptProviderAttempt {
   provider: string;
   available: boolean;
   error: string | undefined;
+  code?: string;
+  blockedBy?: "youtube_bot_challenge";
 }

@@ -16,6 +16,7 @@ function clearEnvironment(): void {
     "YOUTUBE_CURSOR_SECRET",
     "YOUTUBE_CURSOR_TTL_SECONDS",
     "YOUTUBE_MAX_RESULT_BYTES",
+    "YT_DLP_POT_PROVIDER_ENABLED",
     "YOUTUBE_QUOTA_STORE",
     "GOOGLE_CLOUD_PROJECT",
     "MCP_OAUTH_ENABLED",
@@ -41,6 +42,15 @@ describe("runtime config", () => {
     expect(config.cursorTtlMs).toBe(86_400_000);
     expect(config.maxResultBytes).toBe(12_288);
     expect(config.cursorSecretSource).toBe("ephemeral");
+    expect(config.ytDlpPotProviderEnabled).toBe(false);
+  });
+
+  it("enables the optional yt-dlp PO-token integration explicitly", () => {
+    clearEnvironment();
+    vi.stubEnv("YT_DLP_POT_PROVIDER_ENABLED", "true");
+    expect(loadConfig().ytDlpPotProviderEnabled).toBe(true);
+    vi.stubEnv("YT_DLP_POT_PROVIDER_ENABLED", "sometimes");
+    expect(() => loadConfig()).toThrow(/must be a boolean/u);
   });
 
   it("requires strong secrets and derives the hosted OAuth identifiers", () => {

@@ -584,11 +584,13 @@ export class YouTubeDataApiClient {
     pageToken: string | undefined,
     order: "relevance" | "time",
     includeReplies: boolean,
+    replyLimit: number,
   ): Promise<Record<string, unknown>> {
+    const requestReplies = includeReplies && replyLimit > 0;
     const response = await this.request<ListResponse<CommentThread>>(
       "commentThreads",
       {
-        part: includeReplies ? "snippet,replies" : "snippet",
+        part: requestReplies ? "snippet,replies" : "snippet",
         videoId,
         maxResults,
         pageToken,
@@ -600,30 +602,33 @@ export class YouTubeDataApiClient {
     return {
       videoId,
       videoUrl: videoUrl(videoId),
-      items: (response.items ?? []).map((thread) => ({
-        threadId: thread.id ?? null,
-        canReply: thread.snippet?.canReply ?? null,
-        isPublic: thread.snippet?.isPublic ?? null,
-        totalReplyCount: thread.snippet?.totalReplyCount ?? 0,
-        topLevelComment: normalizeComment(
-          thread.snippet?.topLevelComment,
-        ),
-        replies: includeReplies
+      items: (response.items ?? []).map((thread) => {
+        const replies = requestReplies
           ? (thread.replies?.comments ?? [])
               .map(normalizeComment)
               .filter((comment) => comment !== null)
-          : [],
-        repliesComplete:
-          !includeReplies ||
-          (thread.replies?.comments?.length ?? 0) >=
-            (thread.snippet?.totalReplyCount ?? 0),
-      })),
+              .slice(0, replyLimit)
+          : [];
+        const totalReplyCount = thread.snippet?.totalReplyCount ?? 0;
+        return {
+          threadId: thread.id ?? null,
+          canReply: thread.snippet?.canReply ?? null,
+          isPublic: thread.snippet?.isPublic ?? null,
+          totalReplyCount,
+          topLevelComment: normalizeComment(
+            thread.snippet?.topLevelComment,
+          ),
+          replies,
+          repliesReturned: replies.length,
+          repliesComplete: !includeReplies || replies.length >= totalReplyCount,
+        };
+      }),
       nextPageToken: response.nextPageToken ?? null,
       prevPageToken: response.prevPageToken ?? null,
       pageInfo: response.pageInfo ?? null,
       provider: "youtube-data-api-v3",
       note:
-        "Embedded replies may be partial. A dedicated replies pager will be added with the local comment-corpus milestone.",
+        "Embedded replies are capped by reply_limit and may be partial.",
     };
   }
 

@@ -12,6 +12,7 @@ RUN npm run build
 FROM ${NODE_IMAGE} AS runtime
 
 ARG YT_DLP_VERSION="2026.8.19"
+ARG YT_DLP_POT_PROVIDER_VERSION="1.3.1"
 
 ENV NODE_ENV=production \
     MCP_TRANSPORT=http \
@@ -23,7 +24,9 @@ ENV NODE_ENV=production \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv \
     && python3 -m venv /opt/yt-dlp \
-    && /opt/yt-dlp/bin/pip install --no-cache-dir "yt-dlp==${YT_DLP_VERSION}" \
+    && /opt/yt-dlp/bin/pip install --no-cache-dir \
+      "yt-dlp==${YT_DLP_VERSION}" \
+      "bgutil-ytdlp-pot-provider==${YT_DLP_POT_PROVIDER_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

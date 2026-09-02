@@ -8,7 +8,8 @@ param(
   [string]$ImageName = "youtube-mcp-aio",
   [string]$RuntimeServiceAccountName = "youtube-mcp-runner",
   [string]$OAuthCodeCollection = "youtube_oauth_codes",
-  [string]$SmokeVideoId = "dQw4w9WgXcQ",
+  [string[]]$SmokeVideoIds = @("dQw4w9WgXcQ", "arj7oStGLkU", "iG9CE55wbtY"),
+  [string]$PotProviderImage = "docker.io/brainicism/bgutil-ytdlp-pot-provider@sha256:1aaa43a0ca72dfca6a6d2129a0fb4a23465c25adb1b043f8aff829a20825646b",
   [string]$TokenEnvironmentVariable = "YOUTUBE_MCP_ACCESS_TOKEN",
   [switch]$RotateAccessToken,
   [switch]$Promote
@@ -117,21 +118,36 @@ function Deploy-Candidate {
     MCP_OAUTH_CODE_COLLECTION = $OAuthCodeCollection
     YOUTUBE_QUOTA_STORE = "firestore"
     GOOGLE_CLOUD_PROJECT = $ProjectId
+    YT_DLP_POT_PROVIDER_ENABLED = "true"
     YOUTUBE_CURSOR_TTL_SECONDS = "86400"
     YOUTUBE_MAX_RESULT_BYTES = "12288"
   })
   $secretValues = "MCP_ACCESS_TOKEN=youtube-mcp-access-token:$accessVersion,MCP_OAUTH_LOGIN_SECRET=youtube-mcp-oauth-login-secret:$oauthLoginVersion,MCP_OAUTH_SIGNING_SECRET=youtube-mcp-oauth-signing-secret:$oauthSigningVersion,YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion,YOUTUBE_API_KEY=youtube-data-api-key:$apiKeyVersion"
   $arguments = @(
     "run", "deploy", $ServiceName, "--project", $ProjectId, "--region", $Region,
-    "--image", $immutableImage, "--allow-unauthenticated", "--ingress", "all",
+    "--allow-unauthenticated", "--ingress", "all",
     "--execution-environment", "gen2", "--service-account", $runtimeServiceAccount,
-    "--port", "8080", "--cpu", "1", "--memory", "1Gi", "--concurrency", "4",
+    "--concurrency", "4",
     "--timeout", "300", "--min-instances", "0", "--max-instances", "2",
-    "--env-vars-file", $environmentFile, "--set-secrets", $secretValues,
     "--revision-suffix", $RevisionSuffix, "--tag", "candidate",
     "--labels", "app=youtube-mcp-aio,git-sha=$shortSha", "--quiet"
   )
   if ($NoTraffic) { $arguments += "--no-traffic" }
+  $arguments += @(
+    "--container", "mcp",
+    "--image", $immutableImage,
+    "--port", "8080",
+    "--cpu", "1",
+    "--memory", "1Gi",
+    "--depends-on", "pot-provider",
+    "--env-vars-file", $environmentFile,
+    "--set-secrets", $secretValues,
+    "--container", "pot-provider",
+    "--image", $PotProviderImage,
+    "--cpu", "0.25",
+    "--memory", "512Mi",
+    "--startup-probe", "httpGet.path=/ping,httpGet.port=4416,initialDelaySeconds=0,timeoutSeconds=2,periodSeconds=2,failureThreshold=20"
+  )
   try { Invoke-Gcloud @arguments }
   finally { Remove-Item -LiteralPath $environmentFile -Force -ErrorAction SilentlyContinue }
 }
@@ -234,7 +250,7 @@ try {
   $env:MCP_SMOKE_ACCESS_TOKEN = $accessToken
   & node (Join-Path $PSScriptRoot "smoke-cloud-run.mjs") `
     --url "$candidateUrl/mcp" `
-    --video $SmokeVideoId
+    --videos ($SmokeVideoIds -join ",")
   if ($LASTEXITCODE -ne 0) { throw "Protocol-aware YouTube candidate smoke failed." }
 }
 finally {
@@ -259,6 +275,7 @@ else {
   Write-Host "[6/6] Candidate credential was not persisted because production was not promoted." -ForegroundColor Yellow
 }
 Write-Host "Image:      $immutableImage"
+Write-Host "POT sidecar: $PotProviderImage"
 Write-Host "Revision:   $candidateRevision"
 Write-Host "Candidate:  $candidateUrl/mcp"
 Write-Host "Production: $serviceUrl/mcp"

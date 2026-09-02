@@ -45,6 +45,8 @@ assert registered == EXPECTED_TOOLS, registered
 docker = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 assert "node:24.12.0-bookworm-slim@sha256:" in docker
 assert 'YT_DLP_VERSION="2026.8.19"' in docker
+assert 'YT_DLP_POT_PROVIDER_VERSION="1.3.1"' in docker
+assert '"bgutil-ytdlp-pot-provider==${YT_DLP_POT_PROVIDER_VERSION}"' in docker
 
 provision = (ROOT / "scripts" / "provision-gcp.ps1").read_text(encoding="utf-8")
 deploy = (ROOT / "scripts" / "deploy-cloud-run.ps1").read_text(encoding="utf-8")
@@ -64,7 +66,14 @@ assert "--to-tags" not in deployment
 assert 'HEALTH_PATH = "/health"' in deployment
 assert 'HTTP_MAX_BODY_BYTES = "2097152"' in deployment
 assert 'YOUTUBE_MAX_RESULT_BYTES = "12288"' in deployment
+assert 'YT_DLP_POT_PROVIDER_ENABLED = "true"' in deployment
 assert '"--env-vars-file", $environmentFile' in deployment
+assert '"--container", "mcp"' in deploy
+assert '"--container", "pot-provider"' in deploy
+assert '"--depends-on", "pot-provider"' in deploy
+assert "brainicism/bgutil-ytdlp-pot-provider@sha256:" in deploy
+assert '--videos ($SmokeVideoIds -join ",")' in deploy
+assert "arj7oStGLkU" in deploy and "iG9CE55wbtY" in deploy
 assert '"$shortSha-bootstrap-$revisionNonce" $serviceUrl $bootstrapHosts $serviceExists' in deploy
 assert "YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion" in deployment
 

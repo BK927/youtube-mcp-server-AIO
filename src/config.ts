@@ -32,6 +32,14 @@ function readPositiveInteger(
   return parsed;
 }
 
+function readBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  throw new Error(`${name} must be a boolean.`);
+}
+
 function readIntegerRange(
   name: string,
   fallback: number,
@@ -103,6 +111,10 @@ export function loadConfig(): AppConfig {
     transcriptProviders:
       providerMode === "official" ? [] : readTranscriptProviders(),
     ytDlpPath: process.env.YT_DLP_PATH?.trim() || "yt-dlp",
+    ytDlpPotProviderEnabled: readBoolean(
+      "YT_DLP_POT_PROVIDER_ENABLED",
+      false,
+    ),
     defaultRegion:
       process.env.YOUTUBE_DEFAULT_REGION?.trim().toUpperCase() || "US",
     defaultLanguage:

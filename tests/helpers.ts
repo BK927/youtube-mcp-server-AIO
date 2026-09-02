@@ -9,6 +9,7 @@ export function testAppConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     providerMode: "official",
     transcriptProviders: [],
     ytDlpPath: "yt-dlp",
+    ytDlpPotProviderEnabled: false,
     defaultRegion: "US",
     defaultLanguage: "en",
     requestTimeoutMs: 5_000,

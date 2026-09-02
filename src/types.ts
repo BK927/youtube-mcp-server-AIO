@@ -8,6 +8,7 @@ export interface AppConfig {
   providerMode: ProviderMode;
   transcriptProviders: TranscriptProviderName[];
   ytDlpPath: string;
+  ytDlpPotProviderEnabled: boolean;
   defaultRegion: string;
   defaultLanguage: string;
   requestTimeoutMs: number;

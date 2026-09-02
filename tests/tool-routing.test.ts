@@ -74,7 +74,16 @@ describe("public tool routing", () => {
     const listComments = vi.fn(async () => ({
       videoId: VIDEO_ID,
       provider: "comments-provider",
-      items: [{ id: "comment-1", text: "comment text" }],
+      items: [
+        {
+          threadId: "thread-1",
+          totalReplyCount: 0,
+          topLevelComment: { id: "comment-1", text: "comment text" },
+          replies: [],
+          repliesReturned: 0,
+          repliesComplete: true,
+        },
+      ],
       warnings: [],
     }));
     const { client, server } = await connectedClient({
@@ -163,11 +172,21 @@ describe("public tool routing", () => {
             undefined,
             "time",
             false,
+            0,
           ),
         expected: {
           kind: "collection",
           data: { videoId: VIDEO_ID, provider: "comments-provider" },
-          items: [{ id: "comment-1", text: "comment text" }],
+          items: [
+            {
+              threadId: "thread-1",
+              totalReplyCount: 0,
+              topLevelComment: { id: "comment-1", text: "comment text" },
+              replies: [],
+              repliesReturned: 0,
+              repliesComplete: true,
+            },
+          ],
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: `youtube://entity/video/${VIDEO_ID}`,
           provider: "comments-provider",
@@ -185,6 +204,128 @@ describe("public tool routing", () => {
         route.assertCall();
         expect(selectedOutput(result)).toEqual(route.expected);
       }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("keeps comment identity fields intact while bounding optional replies", async () => {
+    const listComments = vi.fn(
+      async (
+        _videoId: string,
+        _limit: number,
+        _pageToken: string | undefined,
+        _order: "relevance" | "time",
+        includeReplies: boolean,
+        replyLimit: number,
+      ) => ({
+        videoId: VIDEO_ID,
+        provider: "comments-provider",
+        items: Array.from({ length: 5 }, (_, index) => ({
+          threadId: `thread-${index}`,
+          totalReplyCount: 3,
+          topLevelComment: {
+            id: `comment-${index}`,
+            author: { name: `author-${index}` },
+            text: `top-${index}-${"x".repeat(500)}`,
+            publishedAt: "2026-09-02T00:00:00Z",
+          },
+          replies: includeReplies
+            ? Array.from({ length: 3 }, (_, replyIndex) => ({
+                id: `reply-${index}-${replyIndex}`,
+                author: { name: `reply-author-${replyIndex}` },
+                text: `reply-${replyIndex}-${"y".repeat(300)}`,
+                publishedAt: "2026-09-02T00:00:00Z",
+              })).slice(0, replyLimit)
+            : [],
+          repliesReturned: includeReplies ? Math.min(3, replyLimit) : 0,
+          repliesComplete: !includeReplies || replyLimit >= 3,
+        })),
+        warnings: [],
+      }),
+    );
+    const { client, server } = await connectedClient({ listComments });
+    try {
+      const defaultResult = await client.callTool({
+        name: "youtube_video_get",
+        arguments: {
+          video: VIDEO_ID,
+          view: "comments",
+          limit: 5,
+          max_chars: 256,
+        },
+      });
+      expect(listComments).toHaveBeenLastCalledWith(
+        VIDEO_ID,
+        5,
+        undefined,
+        "relevance",
+        false,
+        0,
+      );
+      const defaultEnvelope = defaultResult.structuredContent as {
+        data: { truncation?: { truncated: boolean } };
+        items: Array<{
+          threadId: string;
+          topLevelComment: { id: string; text: string; publishedAt: string };
+          replies: unknown[];
+        }>;
+        page: { returned: number };
+      };
+      expect(defaultEnvelope.items).toHaveLength(5);
+      expect(defaultEnvelope.page.returned).toBe(defaultEnvelope.items.length);
+      expect(
+        defaultEnvelope.items.every(
+          (item) =>
+            item.threadId &&
+            item.topLevelComment.id &&
+            item.topLevelComment.text &&
+            item.topLevelComment.publishedAt &&
+            item.replies.length === 0,
+        ),
+      ).toBe(true);
+      expect(defaultEnvelope.data.truncation?.truncated).toBe(true);
+
+      const repliesResult = await client.callTool({
+        name: "youtube_video_get",
+        arguments: {
+          video: VIDEO_ID,
+          view: "comments",
+          options: { include_replies: true, reply_limit: 2 },
+          limit: 5,
+          max_chars: 512,
+        },
+      });
+      expect(listComments).toHaveBeenLastCalledWith(
+        VIDEO_ID,
+        5,
+        undefined,
+        "relevance",
+        true,
+        2,
+      );
+      const repliesEnvelope = repliesResult.structuredContent as {
+        items: Array<{
+          topLevelComment: { id: string; text: string };
+          replies: Array<{ id: string; text: string }>;
+        }>;
+        page: { returned: number };
+        meta: { untrusted_fields: string[] };
+      };
+      expect(repliesEnvelope.page.returned).toBe(repliesEnvelope.items.length);
+      expect(
+        repliesEnvelope.items.every(
+          (item) =>
+            item.topLevelComment.id &&
+            item.topLevelComment.text &&
+            item.replies.length <= 2 &&
+            item.replies.every((reply) => reply.id && reply.text),
+        ),
+      ).toBe(true);
+      expect(repliesEnvelope.meta.untrusted_fields).toContain(
+        "items[].topLevelComment.text",
+      );
     } finally {
       await client.close();
       await server.close();
@@ -349,6 +490,45 @@ describe("public tool routing", () => {
         route.assertCall();
         expect(selectedOutput(result)).toEqual(route.expected);
       }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("infers a trending region only from an explicit locale region", async () => {
+    const trending = vi.fn(async (regionCode: string) => ({
+      provider: "trending-provider",
+      regionCode,
+      items: [],
+    }));
+    const { client, server } = await connectedClient({ trending });
+    try {
+      const inferred = await client.callTool({
+        name: "youtube_search",
+        arguments: { scope: "trending", locale: "ko-KR" },
+      });
+      expect(inferred.isError).not.toBe(true);
+      expect(trending).toHaveBeenLastCalledWith("KR", undefined, 10, undefined);
+
+      await client.callTool({
+        name: "youtube_search",
+        arguments: {
+          scope: "trending",
+          locale: "ko-KR",
+          filters: { region: "JP" },
+        },
+      });
+      expect(trending).toHaveBeenLastCalledWith("JP", undefined, 10, undefined);
+
+      const invalid = await client.callTool({
+        name: "youtube_search",
+        arguments: { scope: "trending", filters: { region: "KOR" } },
+      });
+      expect(invalid.isError).toBe(true);
+      expect(invalid.structuredContent).toMatchObject({
+        code: "INVALID_ARGUMENT",
+      });
     } finally {
       await client.close();
       await server.close();
