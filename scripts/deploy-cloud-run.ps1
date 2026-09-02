@@ -89,18 +89,51 @@ function Get-TaggedRevision {
   return [string]$match[0].revisionName
 }
 
-function New-GcloudEnvironmentFile {
-  param([System.Collections.IDictionary]$Values)
-  $path = Join-Path ([IO.Path]::GetTempPath()) ("youtube-mcp-env-{0}.json" -f [Guid]::NewGuid().ToString("N"))
-  $json = $Values | ConvertTo-Json -Compress
-  [IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))
-  return $path
+function Get-StableRevision {
+  param([object]$Document)
+  $match = @($Document.status.traffic | Where-Object {
+      $_.PSObject.Properties["revisionName"] -and
+      $_.PSObject.Properties["percent"] -and
+      [int]$_.percent -gt 0
+    } | Sort-Object -Property percent -Descending | Select-Object -First 1)
+  if ($match.Count -eq 0) { throw "The existing service has no stable revision receiving traffic." }
+  return [string]$match[0].revisionName
+}
+
+function Get-RunApiHeaders {
+  $token = (@(& gcloud auth print-access-token) -join "").Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) { throw "Could not obtain a Google Cloud access token." }
+  return @{ Authorization = "Bearer $token" }
+}
+
+function Wait-RunOperation {
+  param([object]$Operation, [hashtable]$Headers)
+  $current = $Operation
+  $deadline = [DateTimeOffset]::UtcNow.AddMinutes(5)
+  while (-not ($current.PSObject.Properties.Name -contains "done") -or -not [bool]$current.done) {
+    if ([DateTimeOffset]::UtcNow -ge $deadline) { throw "Timed out waiting for the Cloud Run service update." }
+    Start-Sleep -Seconds 2
+    $current = Invoke-RestMethod -Uri "https://run.googleapis.com/v2/$($current.name)" -Headers $Headers
+  }
+  if ($current.PSObject.Properties.Name -contains "error") {
+    throw "Cloud Run service update failed: $($current.error.message)"
+  }
+  return $current
+}
+
+function Invoke-RunServicePatch {
+  param([object]$Body, [bool]$ValidateOnly)
+  $headers = Get-RunApiHeaders
+  $query = "updateMask=template,traffic,scaling,ingress&forceNewRevision=true&validateOnly=$($ValidateOnly.ToString().ToLowerInvariant())"
+  $uri = "https://run.googleapis.com/v2/projects/$ProjectId/locations/$Region/services/$ServiceName`?$query"
+  $json = $Body | ConvertTo-Json -Depth 30 -Compress
+  $operation = Invoke-RestMethod -Uri $uri -Method Patch -Headers $headers -ContentType "application/json" -Body $json
+  return Wait-RunOperation $operation $headers
 }
 
 function Deploy-Candidate {
-  param([string]$RevisionSuffix, [string]$PublicBaseUrl, [string]$AllowedHosts, [bool]$NoTraffic)
-  $oauthEnabled = if ([string]::IsNullOrWhiteSpace($PublicBaseUrl)) { "false" } else { "true" }
-  $environmentFile = New-GcloudEnvironmentFile ([ordered]@{
+  param([string]$RevisionSuffix, [string]$PublicBaseUrl, [string]$AllowedHosts, [string]$StableRevision)
+  $environment = [ordered]@{
     MCP_TRANSPORT = "http"
     HOST = "0.0.0.0"
     MCP_PATH = "/mcp"
@@ -121,37 +154,55 @@ function Deploy-Candidate {
     YT_DLP_POT_PROVIDER_ENABLED = "true"
     YOUTUBE_CURSOR_TTL_SECONDS = "86400"
     YOUTUBE_MAX_RESULT_BYTES = "12288"
-  })
-  $secretValues = "MCP_ACCESS_TOKEN=youtube-mcp-access-token:$accessVersion,MCP_OAUTH_LOGIN_SECRET=youtube-mcp-oauth-login-secret:$oauthLoginVersion,MCP_OAUTH_SIGNING_SECRET=youtube-mcp-oauth-signing-secret:$oauthSigningVersion,YOUTUBE_CURSOR_SECRET=youtube-mcp-cursor-secret:$cursorSecretVersion,YOUTUBE_API_KEY=youtube-data-api-key:$apiKeyVersion"
-  $arguments = @(
-    "run", "deploy", $ServiceName, "--project", $ProjectId, "--region", $Region,
-    "--allow-unauthenticated", "--ingress", "all",
-    "--execution-environment", "gen2", "--service-account", $runtimeServiceAccount,
-    "--concurrency", "4",
-    "--timeout", "300", "--min-instances", "0", "--max-instances", "2",
-    "--revision-suffix", $RevisionSuffix, "--tag", "candidate",
-    "--labels", "app=youtube-mcp-aio,git-sha=$shortSha", "--quiet"
+  }
+  $envEntries = @($environment.GetEnumerator() | ForEach-Object {
+      [ordered]@{ name = [string]$_.Key; value = [string]$_.Value }
+    })
+  $envEntries += @(
+    [ordered]@{ name = "MCP_ACCESS_TOKEN"; valueSource = @{ secretKeyRef = @{ secret = "youtube-mcp-access-token"; version = $accessVersion } } },
+    [ordered]@{ name = "MCP_OAUTH_LOGIN_SECRET"; valueSource = @{ secretKeyRef = @{ secret = "youtube-mcp-oauth-login-secret"; version = $oauthLoginVersion } } },
+    [ordered]@{ name = "MCP_OAUTH_SIGNING_SECRET"; valueSource = @{ secretKeyRef = @{ secret = "youtube-mcp-oauth-signing-secret"; version = $oauthSigningVersion } } },
+    [ordered]@{ name = "YOUTUBE_CURSOR_SECRET"; valueSource = @{ secretKeyRef = @{ secret = "youtube-mcp-cursor-secret"; version = $cursorSecretVersion } } },
+    [ordered]@{ name = "YOUTUBE_API_KEY"; valueSource = @{ secretKeyRef = @{ secret = "youtube-data-api-key"; version = $apiKeyVersion } } }
   )
-  if ($NoTraffic) { $arguments += "--no-traffic" }
-  $arguments += @(
-    # Keep the existing unnamed ingress container as the primary container when
-    # converting the service to multi-container. Naming a new ingress container
-    # would retain the old one and leave two containers with exposed ports.
-    "--image", $immutableImage,
-    "--port", "8080",
-    "--cpu", "1",
-    "--memory", "1Gi",
-    "--depends-on", "pot-provider",
-    "--env-vars-file", $environmentFile,
-    "--set-secrets", $secretValues,
-    "--container", "pot-provider",
-    "--image", $PotProviderImage,
-    "--cpu", "0.25",
-    "--memory", "512Mi",
-    "--startup-probe", "httpGet.path=/ping,httpGet.port=4416,initialDelaySeconds=0,timeoutSeconds=2,periodSeconds=2,failureThreshold=20"
-  )
-  try { Invoke-Gcloud @arguments }
-  finally { Remove-Item -LiteralPath $environmentFile -Force -ErrorAction SilentlyContinue }
+  $revisionName = "$ServiceName-$RevisionSuffix"
+  $body = [ordered]@{
+    name = "projects/$ProjectId/locations/$Region/services/$ServiceName"
+    ingress = "INGRESS_TRAFFIC_ALL"
+    scaling = [ordered]@{ minInstanceCount = 0; maxInstanceCount = 2 }
+    template = [ordered]@{
+      revision = $revisionName
+      labels = [ordered]@{ app = "youtube-mcp-aio"; "git-sha" = $shortSha }
+      scaling = [ordered]@{ minInstanceCount = 0; maxInstanceCount = 2 }
+      timeout = "300s"
+      serviceAccount = $runtimeServiceAccount
+      executionEnvironment = "EXECUTION_ENVIRONMENT_GEN2"
+      maxInstanceRequestConcurrency = 4
+      containers = @(
+        [ordered]@{
+          name = "mcp"
+          image = $immutableImage
+          env = $envEntries
+          resources = [ordered]@{ limits = [ordered]@{ cpu = "1"; memory = "1Gi" }; cpuIdle = $true; startupCpuBoost = $true }
+          ports = @([ordered]@{ name = "http1"; containerPort = 8080 })
+          startupProbe = [ordered]@{ timeoutSeconds = 2; periodSeconds = 2; failureThreshold = 30; tcpSocket = @{ port = 8080 } }
+          dependsOn = @("pot-provider")
+        },
+        [ordered]@{
+          name = "pot-provider"
+          image = $PotProviderImage
+          resources = [ordered]@{ limits = [ordered]@{ cpu = "0.25"; memory = "512Mi" }; cpuIdle = $true; startupCpuBoost = $true }
+          startupProbe = [ordered]@{ timeoutSeconds = 2; periodSeconds = 2; failureThreshold = 30; httpGet = @{ path = "/ping"; port = 4416 } }
+        }
+      )
+    }
+    traffic = @(
+      [ordered]@{ type = "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"; revision = $StableRevision; percent = 100 },
+      [ordered]@{ type = "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"; revision = $revisionName; percent = 0; tag = "candidate" }
+    )
+  }
+  Invoke-RunServicePatch $body $true > $null
+  Invoke-RunServicePatch $body $false > $null
 }
 
 function Test-HttpStatus {
@@ -205,29 +256,17 @@ if ($LASTEXITCODE -ne 0 -or $digest -notmatch "^sha256:[0-9a-f]{64}$") { throw "
 $immutableImage = "$Region-docker.pkg.dev/$ProjectId/$RepositoryName/$ImageName@$digest"
 
 $serviceExists = Test-GcloudResource run services describe $ServiceName --project $ProjectId --region $Region
-if (-not $serviceExists -and -not $Promote) { throw "The first deployment has no prior revision. Re-run with -Promote after reviewing the bootstrap exception." }
-$serviceUrl = ""
-$candidateUrl = ""
-if ($serviceExists) {
-  $serviceDocument = Get-ServiceDocument
-  $serviceUrl = [string]$serviceDocument.status.url
-  $candidateUrl = Get-TaggedUrl $serviceDocument "candidate"
-}
-
-if ([string]::IsNullOrWhiteSpace($candidateUrl)) {
-  Write-Host "[2/6] Discovering the stable candidate tag URL..." -ForegroundColor Cyan
-  $bootstrapHosts = if ($serviceUrl) { ([Uri]$serviceUrl).Host } else { "" }
-  Deploy-Candidate "$shortSha-bootstrap-$revisionNonce" $serviceUrl $bootstrapHosts $serviceExists
-  $serviceDocument = Get-ServiceDocument
-  $serviceUrl = [string]$serviceDocument.status.url
-  $candidateUrl = Get-TaggedUrl $serviceDocument "candidate"
-  if ([string]::IsNullOrWhiteSpace($candidateUrl)) { throw "Cloud Run did not publish a candidate tag URL." }
-}
-
-Write-Host "[3/6] Deploying the hardened candidate by digest with zero traffic..." -ForegroundColor Cyan
+if (-not $serviceExists) { throw "A stable Cloud Run revision is required before a zero-traffic candidate can be deployed." }
+$serviceDocument = Get-ServiceDocument
+$serviceUrl = [string]$serviceDocument.status.url
+$stableRevision = Get-StableRevision $serviceDocument
 $serviceHost = ([Uri]$serviceUrl).Host
+$candidateUrl = "https://candidate---$serviceHost"
 $candidateHost = ([Uri]$candidateUrl).Host
-Deploy-Candidate "$shortSha-candidate-$revisionNonce" $serviceUrl "$serviceHost,$candidateHost" $true
+
+Write-Host "[2/6] Validating an explicit two-container Cloud Run revision..." -ForegroundColor Cyan
+Write-Host "[3/6] Deploying the candidate by digest with production pinned to $stableRevision..." -ForegroundColor Cyan
+Deploy-Candidate "$shortSha-candidate-$revisionNonce" $serviceUrl "$serviceHost,$candidateHost" $stableRevision
 $serviceDocument = Get-ServiceDocument
 $candidateUrl = Get-TaggedUrl $serviceDocument "candidate"
 $candidateRevision = Get-TaggedRevision $serviceDocument "candidate"
