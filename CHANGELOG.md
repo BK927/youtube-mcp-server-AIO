@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Allow Chrome to follow the successful personal OAuth form redirect to ChatGPT's exact callback origin.
+
 ## 1.1.0
 
 - Added Firestore-backed cloud quota state, signed bounded cursors/results, and immutable candidate Cloud Run operations.

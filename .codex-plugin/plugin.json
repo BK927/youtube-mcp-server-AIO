@@ -1,6 +1,6 @@
 {
   "name": "youtube-mcp-aio",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Read-only YouTube video, transcript, comment, channel, playlist, and search research.",
   "author": {
     "name": "youtube-mcp-server-aio contributors"

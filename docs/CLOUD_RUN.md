@@ -1,6 +1,6 @@
 # YouTube MCP AIO on Google Cloud Run
 
-This is the fixed Google Cloud production profile for YouTube MCP AIO 1.1.0. No live deployment was run as part of this refactor.
+This is the fixed Google Cloud production profile for YouTube MCP AIO 1.1.1. No live deployment was run as part of this refactor.
 
 ## Fixed v1 resources
 

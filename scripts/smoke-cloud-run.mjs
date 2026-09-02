@@ -57,7 +57,7 @@ function errorSummary(result) {
   };
 }
 
-const client = new Client({ name: "youtube-cloud-smoke", version: "1.1.0" });
+const client = new Client({ name: "youtube-cloud-smoke", version: "1.1.1" });
 const transport = new StreamableHTTPClientTransport(new URL(url), {
   authProvider: { token: async () => token },
 });
