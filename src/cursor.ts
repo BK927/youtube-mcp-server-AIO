@@ -56,13 +56,14 @@ export class CursorCodec {
     operation: string,
     filters: Record<string, unknown>,
     state: Record<string, unknown>,
+    expiresAt = this.now() + this.ttlMs,
   ): string {
     const payload: CursorPayload = {
       v: 1,
       operation,
       filterHash: filterHash(filters),
       state,
-      expiresAt: this.now() + this.ttlMs,
+      expiresAt,
     };
     const encoded = Buffer.from(canonicalJson(payload)).toString("base64url");
     return `${encoded}.${signature(this.secret, encoded).toString("base64url")}`;

@@ -31,6 +31,50 @@ afterEach(() => {
 });
 
 describe("YouTube Data API normalization", () => {
+  it("resolves handles exactly and never substitutes a search hit for a missing handle", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ items: [{ id: CHANNEL_ID }] }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ id: CHANNEL_ID, snippet: { title: "Exact channel" } }] }))
+      .mockResolvedValueOnce(jsonResponse({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { quota, consume } = quotaStore();
+    const client = new YouTubeDataApiClient("test-key", 5000, quota);
+    expect(await client.getChannel({ kind: "handle", value: "exact" })).toMatchObject({
+      id: CHANNEL_ID, resolution: { inputKind: "handle", resolvedBy: "handle" },
+    });
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get("forHandle")).toBe("exact");
+    await expect(client.getChannel({ kind: "handle", value: "missing" })).rejects.toMatchObject({ code: "CHANNEL_NOT_FOUND" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(consume).toHaveBeenCalledTimes(3);
+    expect(consume).not.toHaveBeenCalledWith("search", 1, "search");
+  });
+
+  it("requests and returns a compact trending projection while metadata stays complete", async () => {
+    const item = { id: "dQw4w9WgXcQ", snippet: { title: "Video", description: "full description", tags: ["tag"], thumbnails: { high: { url: "https://example.test/high.jpg" } } }, contentDetails: { duration: "PT3M34S" }, statistics: { viewCount: "123" }, status: { privacyStatus: "public" } };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => jsonResponse({ items: [item], nextPageToken: "next" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new YouTubeDataApiClient("test-key", 5000, quotaStore().quota);
+    const trending = await client.trending("KR", undefined, 10, undefined);
+    expect(trending.items).toMatchObject([{ id: item.id, title: "Video", durationSeconds: 214, statistics: { viewCount: "123" }, thumbnail: "https://example.test/high.jpg" }]);
+    expect((trending.items as object[])[0]).not.toHaveProperty("description");
+    expect((trending.items as object[])[0]).not.toHaveProperty("tags");
+    const request = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(request.searchParams.get("fields")).toContain("nextPageToken");
+    expect(request.searchParams.get("part")).toBe("snippet,contentDetails,statistics");
+    expect(await client.getVideo(item.id)).toMatchObject({ description: "full description", tags: ["tag"], status: { privacyStatus: "public" } });
+  });
+
+  it("decodes search display entities once and labels approximate totals", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      items: [{ id: { videoId: "dQw4w9WgXcQ" }, snippet: { title: "Q&amp;A &#39;&#x1f642; &amp;amp;" } }],
+      pageInfo: { totalResults: 1_000_000 },
+    })));
+    const client = new YouTubeDataApiClient("test-key", 5000, quotaStore().quota);
+    const result = await client.searchVideos("query", { maxResults: 1, pageToken: undefined, order: "relevance", channelId: undefined, publishedAfter: undefined, publishedBefore: undefined, regionCode: undefined, relevanceLanguage: undefined, safeSearch: "moderate", videoDuration: "any" });
+    expect(result.items).toMatchObject([{ title: "Q&A '🙂 &amp;" }]);
+    expect(result.pageInfo).toMatchObject({ totalResults: 1_000_000, totalResultsReliable: false });
+  });
+
   it("uses the search index for a query within a channel", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

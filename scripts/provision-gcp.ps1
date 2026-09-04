@@ -209,6 +209,13 @@ Invoke-Gcloud firestore fields ttls update delete_at `
   --project $ProjectId `
   --quiet
 
+Invoke-Gcloud firestore fields ttls update delete_at `
+  --collection-group "youtube_response_pages" `
+  --database "(default)" `
+  --enable-ttl `
+  --project $ProjectId `
+  --quiet
+
 Write-Host "[6/6] Provisioning complete." -ForegroundColor Green
 Write-Host "Region:            $Region"
 Write-Host "Artifact Registry: $Region-docker.pkg.dev/$ProjectId/$RepositoryName"

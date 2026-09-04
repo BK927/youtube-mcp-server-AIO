@@ -171,6 +171,12 @@ export class YouTubeService {
         videoCacheEntries: VIDEO_CACHE_CAPACITY,
         transcriptCacheEntries: TRANSCRIPT_CACHE_CAPACITY,
         cursorSecretSource: this.config.cursorSecretSource,
+        bufferedPages: {
+          maxEntries: 64,
+          maxSnapshotBytes: 512 * 1024,
+          storage: this.config.quotaStoreMode === "firestore" ? "firestore+memory" : "process-memory",
+          missingPage: "CURSOR_MISMATCH; restart the query without a cursor",
+        },
       },
       quota: {
         store: this.config.quotaStoreMode,

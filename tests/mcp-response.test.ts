@@ -20,6 +20,7 @@ describe("MCP result envelope", () => {
         meta: { provider: "test" },
       },
       4_096,
+      (returned) => `buffer-after-${returned}`,
     );
     expect(resultByteLength(result.structuredContent)).toBeLessThanOrEqual(4_096);
     expect(Object.keys(result.structuredContent.page as object).sort()).toEqual([
@@ -40,7 +41,7 @@ describe("MCP result envelope", () => {
     expect(page.has_more).toBe(Boolean(page.next_cursor));
   });
 
-  it("marks exact item loss when the byte cap has no continuation cursor", () => {
+  it("defers items even on the last upstream page and reports omissions honestly", () => {
     const originalItems = Array.from({ length: 100 }, (_, index) => ({
       index,
       text: `${index}:`.padEnd(2_000, "x"),
@@ -52,6 +53,7 @@ describe("MCP result envelope", () => {
         items: originalItems,
       },
       4_096,
+      (returned) => `buffer-after-${returned}`,
     );
     const envelope = result.structuredContent as {
       data: {
@@ -74,14 +76,15 @@ describe("MCP result envelope", () => {
       original_items: originalItems.length,
       returned_items: envelope.items.length,
       omitted_items: originalItems.length - envelope.items.length,
+      content_omitted: true,
     });
     expect(envelope.meta.warnings).toContain(
-      "Response items were shortened to the configured byte cap.",
+      "Remaining items are available through next_cursor at the configured byte cap.",
     );
     expect(envelope.page).toEqual({
       returned: envelope.items.length,
-      has_more: false,
-      next_cursor: null,
+      has_more: true,
+      next_cursor: `buffer-after-${envelope.items.length}`,
     });
     expect(resultByteLength(envelope)).toBeLessThanOrEqual(4_096);
   });
@@ -117,14 +120,22 @@ describe("MCP result envelope", () => {
       data: { description: "가".repeat(20_000) },
       items: Array.from({ length: 100 }, () => ({ text: "나".repeat(500) })),
     };
-    const defaultResult = successResult(payload, 12_288);
-    const hardResult = successResult(payload, 32_768);
+    const defaultResult = successResult(payload, 12_288, (returned) => `after-${returned}`);
+    const hardResult = successResult(payload, 32_768, (returned) => `after-${returned}`);
     expect(resultByteLength(defaultResult.structuredContent)).toBeLessThanOrEqual(
       12_288,
     );
     expect(resultByteLength(hardResult.structuredContent)).toBeLessThanOrEqual(
       32_768,
     );
+  });
+
+  it("fails explicitly when a page cannot be resumed instead of discarding it", () => {
+    expect(() => successResult({
+      kind: "collection", items: Array.from({ length: 100 }, () => ({ title: "가".repeat(100) })),
+    }, 4096)).toThrow("without losing structured data");
+    expect(() => successResult({ kind: "entity", data: { id: "x".repeat(10_000) } }, 4096))
+      .toThrow("without losing structured data");
   });
 
   it("emits only fixed top-level error fields for the calling operation", () => {

@@ -1,4 +1,4 @@
-import { errorPayload } from "./errors.js";
+import { errorPayload, YouTubeMcpError } from "./errors.js";
 
 const SCHEMA_VERSION = "1";
 export type ResultKind = "entity" | "collection" | "job";
@@ -47,19 +47,18 @@ export function resultByteLength(value: unknown): number {
   return Buffer.byteLength(jsonString(value), "utf8");
 }
 
-function compactValue(value: unknown, depth = 0): unknown {
-  if (depth >= 5) return "[depth capped]";
-  if (typeof value === "string") {
+function compactValue(value: unknown, key = ""): unknown {
+  if (typeof value === "string" && ["description", "text", "excerpt"].includes(key)) {
     return value.length > 1_024 ? `${value.slice(0, 1_021)}...` : value;
   }
   if (Array.isArray(value)) {
-    return value.slice(0, 20).map((item) => compactValue(item, depth + 1));
+    const items = key === "tags" ? value.slice(0, 20) : value;
+    return items.map((item) => compactValue(item, key));
   }
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .slice(0, 40)
-      .map(([key, item]) => [key, compactValue(item, depth + 1)]),
+      .map(([key, item]) => [key, compactValue(item, key)]),
   );
 }
 
@@ -122,7 +121,7 @@ function withTruncationMarker(
       truncated: true,
       reason: "max_result_bytes",
       fields_compacted: true,
-      content_omitted: contentOmitted,
+      content_omitted: contentOmitted || originalItems > returnedItems,
       original_items: originalItems,
       returned_items: returnedItems,
       omitted_items: originalItems - returnedItems,
@@ -133,6 +132,7 @@ function withTruncationMarker(
 function fitEnvelope(
   payload: ToolPayload,
   maxBytes: number,
+  continuation?: (returned: number) => string | null,
 ): Record<string, unknown> {
   let envelope = createEnvelope(payload);
   if (resultByteLength(envelope) <= maxBytes) return envelope;
@@ -141,7 +141,7 @@ function fitEnvelope(
   const items = originalItems.map((item) => compactValue(item));
   envelope = createEnvelope({
     ...payload,
-    data: withTruncationMarker(payload.data, originalItems.length, items.length),
+    data: withTruncationMarker(payload.data, originalItems.length, items.length, true),
     items,
     meta: withCapWarning(
       payload,
@@ -150,46 +150,32 @@ function fitEnvelope(
   });
   if (resultByteLength(envelope) <= maxBytes) return envelope;
 
-  while (items.length > 0) {
+  while (items.length > 1 && continuation) {
     items.pop();
     envelope = createEnvelope({
       ...payload,
       data: withTruncationMarker(payload.data, originalItems.length, items.length),
       items,
+      page: page(items, continuation(items.length)),
       meta: withCapWarning(
         payload,
         "Response fields were compacted to the configured byte cap.",
-        "Response items were shortened to the configured byte cap.",
+        "Remaining items are available through next_cursor at the configured byte cap.",
       ),
     });
     if (resultByteLength(envelope) <= maxBytes) return envelope;
   }
 
-  envelope = createEnvelope({
-    ...payload,
-    data: withTruncationMarker(payload.data, originalItems.length, 0),
-    items: [],
-    meta: withCapWarning(
-      payload,
-      "Response fields were compacted to the configured byte cap.",
-    ),
-  });
-  if (resultByteLength(envelope) <= maxBytes) return envelope;
-
-  return createEnvelope({
-    kind: payload.kind,
-    data: withTruncationMarker({}, originalItems.length, 0, true),
-    page: page([], payload.page?.next_cursor ?? null),
-    meta: {
-      canonical_uri: payload.meta?.canonical_uri ?? null,
-      provider: payload.meta?.provider ?? "unknown",
-      warnings: ["Response content was omitted at the configured byte cap."],
-    },
-  });
+  throw new YouTubeMcpError(
+    "UPSTREAM_ERROR",
+    "The response cannot fit the byte cap without losing structured data. Use a smaller limit or selection.",
+    { reason: "max_result_bytes", maxBytes },
+    false,
+  );
 }
 
-export function successResult(payload: ToolPayload, maxBytes: number) {
-  const envelope = fitEnvelope(payload, maxBytes);
+export function successResult(payload: ToolPayload, maxBytes: number, continuation?: (returned: number) => string | null) {
+  const envelope = fitEnvelope(payload, maxBytes, continuation);
   const resultPage = envelope.page as ToolPage;
   return {
     content: [

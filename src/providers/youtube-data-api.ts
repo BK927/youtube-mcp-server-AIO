@@ -7,6 +7,7 @@ import {
   videoUrl,
 } from "../utils/ids.js";
 import { parseIso8601Duration } from "../utils/time.js";
+import { decodeSearchText } from "../utils/text.js";
 
 interface ListResponse<T> {
   items?: T[];
@@ -373,10 +374,10 @@ export class YouTubeDataApiClient {
           {
             id,
             url: videoUrl(id),
-            title: item.snippet?.title ?? null,
-            description: item.snippet?.description ?? null,
+            title: decodeSearchText(item.snippet?.title),
+            description: decodeSearchText(item.snippet?.description),
             channelId: item.snippet?.channelId ?? null,
-            channelTitle: item.snippet?.channelTitle ?? null,
+            channelTitle: decodeSearchText(item.snippet?.channelTitle),
             publishedAt: item.snippet?.publishedAt ?? null,
             liveBroadcastContent:
               item.snippet?.liveBroadcastContent ?? null,
@@ -386,7 +387,7 @@ export class YouTubeDataApiClient {
       }),
       nextPageToken: response.nextPageToken ?? null,
       prevPageToken: response.prevPageToken ?? null,
-      pageInfo: response.pageInfo ?? null,
+      pageInfo: response.pageInfo ? { ...response.pageInfo, totalResultsReliable: false } : null,
       provider: "youtube-data-api-v3",
     };
   }
@@ -413,6 +414,11 @@ export class YouTubeDataApiClient {
           resolvedBy: reference.kind,
         };
       }
+      throw new YouTubeMcpError(
+        "CHANNEL_NOT_FOUND",
+        "No channel matches this exact handle or username.",
+        { reference },
+      );
     }
 
     const response = await this.request<ListResponse<SearchItem>>(
@@ -684,8 +690,9 @@ export class YouTubeDataApiClient {
     pageToken: string | undefined,
   ): Promise<Record<string, unknown>> {
     const response = await this.request<ListResponse<VideoItem>>("videos", {
-      part: "snippet,contentDetails,statistics,status,liveStreamingDetails",
+      part: "snippet,contentDetails,statistics",
       chart: "mostPopular",
+      fields: "items(id,snippet(title,channelId,channelTitle,publishedAt,thumbnails/high),contentDetails/duration,statistics(viewCount,likeCount,commentCount)),nextPageToken,prevPageToken,pageInfo",
       regionCode,
       videoCategoryId: categoryId,
       maxResults,
@@ -694,7 +701,17 @@ export class YouTubeDataApiClient {
     return {
       regionCode,
       categoryId: categoryId ?? null,
-      items: (response.items ?? []).map(normalizeVideo),
+      items: (response.items ?? []).map((item) => {
+        const video = normalizeVideo(item);
+        return {
+          id: video.id, url: video.url, title: video.title,
+          channelId: video.channelId, channelTitle: video.channelTitle,
+          publishedAt: video.publishedAt, durationSeconds: video.durationSeconds,
+          statistics: video.statistics,
+          thumbnail: item.snippet?.thumbnails?.high?.url ?? null,
+          provider: video.provider, completeness: video.completeness,
+        };
+      }),
       nextPageToken: response.nextPageToken ?? null,
       prevPageToken: response.prevPageToken ?? null,
       pageInfo: response.pageInfo ?? null,

@@ -9,6 +9,8 @@ import { CursorCodec } from "./cursor.js";
 import { YouTubeMcpError } from "./errors.js";
 import { SERVER_NAME, SERVER_VERSION } from "./meta.js";
 import { runTool, type ToolPayload } from "./mcp-response.js";
+import { ResponsePager } from "./response-pager.js";
+import { FirestorePageStore } from "./cache/response-page-store.js";
 import type { AppConfig } from "./types.js";
 import {
   extractPlaylistId,
@@ -32,6 +34,7 @@ const oauthMeta = {
 const cursorSchema = z.string().min(1).optional();
 const limitSchema = z.number().int().min(1).max(100).default(10);
 const filtersSchema = z.record(z.string(), z.unknown()).default({});
+const responsePagers = new WeakMap<object, ResponsePager>();
 
 const TOOL_SCHEMAS: Record<string, unknown> = {
   youtube_video_get: {
@@ -64,7 +67,7 @@ const TOOL_SCHEMAS: Record<string, unknown> = {
       query: "required for global/transcript; optional for channel",
       within: "channel for channel scope; video for transcript scope",
       filters: {
-        global: ["order", "channel_id", "published_after", "published_before", "region", "language", "safe_search", "video_duration"],
+        global: ["order", "channel_id", "published_after", "published_before", "region", "relevance_language", "safe_search", "video_duration"],
         channel: ["strategy"],
         transcript: ["language", "match_mode", "case_sensitive", "context_segments", "from", "to"],
         trending: ["region", "category_id"],
@@ -306,29 +309,33 @@ function capPayloadText(
   data: unknown,
   items: unknown[],
   maxChars: number,
-): { data: unknown; items: unknown[] } {
+): { data: unknown; items: unknown[]; warning?: string | undefined } {
   let remaining = maxChars;
-  const visit = (item: unknown): unknown => {
-    if (typeof item === "string") {
-      if (remaining <= 0) return "";
+  let truncated = false;
+  const visit = (item: unknown, key = ""): unknown => {
+    if (typeof item === "string" && key === "description") {
       const capped = item.slice(0, remaining);
       remaining -= capped.length;
+      truncated ||= capped.length < item.length;
       return capped.length < item.length && capped.length >= 3
         ? `${capped.slice(0, -3)}...`
         : capped;
     }
-    if (Array.isArray(item)) return item.map(visit);
+    if (Array.isArray(item)) return item.map((child) => visit(child, key));
     if (!item || typeof item !== "object") return item;
     return Object.fromEntries(
       Object.entries(item as Record<string, unknown>).map(([key, child]) => [
         key,
-        visit(child),
+        visit(child, key),
       ]),
     );
   };
+  const cappedData = visit(data);
+  const cappedItems = visit(items) as unknown[];
   return {
-    data: visit(data),
-    items: visit(items) as unknown[],
+    data: truncated ? { ...record(cappedData), truncation: { reason: "max_chars", max_chars: maxChars, content_omitted: true, fields: ["description"] } } : cappedData,
+    items: cappedItems,
+    warning: truncated ? "Description text was shortened to max_chars; structured metadata was preserved." : undefined,
   };
 }
 
@@ -619,7 +626,7 @@ function payload(
       provider: provider(sourceRecord) ?? "unknown",
       fresh_until: freshUntil(config),
       quota_cost: quotaCost,
-      warnings: stringArray(sourceRecord.warnings),
+      warnings: [...stringArray(sourceRecord.warnings), ...("warning" in capped && capped.warning ? [capped.warning] : [])],
       untrusted_fields: untrustedFields,
     },
   };
@@ -658,11 +665,18 @@ export function createYoutubeMcpServer(
   );
   const service = options.service ?? new YouTubeService(config);
   const codec = new CursorCodec(config.cursorSecret, config.cursorTtlMs);
+  let pager = responsePagers.get(service);
+  if (!pager) {
+    pager = new ResponsePager(codec, config.cursorTtlMs, config.maxResultBytes,
+      config.quotaStoreMode === "firestore" ? new FirestorePageStore(config.firestoreProjectId) : undefined);
+    responsePagers.set(service, pager);
+  }
+  const responsePager = pager;
 
   server.registerTool(
     "youtube_video_get",
     {
-      description: "Get one video's metadata, transcript page, or comments page.",
+      description: "Get video data. max_chars: text only. View options: youtube://schema/youtube_video_get.",
       inputSchema: z.object({
         video: z.string().min(1),
         view: z.enum(["metadata", "transcript", "comments"]).default("metadata"),
@@ -676,7 +690,7 @@ export function createYoutubeMcpServer(
       _meta: oauthMeta,
     },
     async ({ video, view, options, cursor, limit, max_chars: maxChars, locale }) =>
-      runTool("youtube_video_get", async () => {
+      responsePager.run("youtube_video_get", { video, view, options, maxChars, locale }, cursor, limit, async () => {
         const videoId = extractVideoId(video);
         const canonicalUri = `youtube://entity/video/${videoId}`;
         if (view === "metadata") {
@@ -868,13 +882,13 @@ export function createYoutubeMcpServer(
           ],
           config,
         );
-      }, config.maxResultBytes),
+      }),
   );
 
   server.registerTool(
     "youtube_search",
     {
-      description: "Search globally, within a channel or transcript, or get trending videos.",
+      description: "Search videos/transcripts. Scope filters: youtube://schema/youtube_search. Trending returns compact metadata.",
       inputSchema: z.object({
         scope: z.enum(["global", "channel", "transcript", "trending"]).default("global"),
         query: z.string().default(""),
@@ -888,7 +902,7 @@ export function createYoutubeMcpServer(
       _meta: oauthMeta,
     },
     async ({ scope, query, within, filters, cursor, limit, locale }) =>
-      runTool("youtube_search", async () => {
+      responsePager.run("youtube_search", { scope, query, within, filters, locale }, cursor, limit, async () => {
         if (scope === "global") {
           const normalized = checkedFilters(filters, [
             "order",
@@ -944,7 +958,7 @@ export function createYoutubeMcpServer(
               : null;
           return payload(
             "collection",
-            without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]),
+            { ...without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]), totalResultsReliable: false },
             items,
             next,
             null,
@@ -1023,7 +1037,11 @@ export function createYoutubeMcpServer(
             typeof channelRecord.id === "string" ? channelRecord.id : channel;
           return payload(
             "collection",
-            without(result, ["items", "nextPageToken", "prevPageToken", "warnings"]),
+            {
+              ...without(result, ["items", "nextPageToken", "prevPageToken", "warnings", "channel"]),
+              channel: { id: channelId, title: channelRecord.title ?? null },
+              ...(strategy === "search" ? { totalResultsReliable: false } : {}),
+            },
             items,
             next,
             `youtube://entity/channel/${channelId}`,
@@ -1031,7 +1049,7 @@ export function createYoutubeMcpServer(
             strategy === "search"
               ? { data: 1, search: 1 }
               : { data: 2, search: 0 },
-            ["data.channel.title", "data.channel.description", "items[].title", "items[].description", "items[].channelTitle"],
+            ["data.channel.title", "items[].title", "items[].description", "items[].channelTitle"],
             config,
           );
         }
@@ -1129,7 +1147,7 @@ export function createYoutubeMcpServer(
           ["items[].title", "items[].description", "items[].tags", "items[].channelTitle"],
           config,
         );
-      }, config.maxResultBytes),
+      }),
   );
 
   server.registerTool(
@@ -1178,7 +1196,7 @@ export function createYoutubeMcpServer(
       _meta: oauthMeta,
     },
     async ({ playlist, include_items: includeItems, cursor, limit }) =>
-      runTool("youtube_playlist_get", async () => {
+      responsePager.run("youtube_playlist_get", { playlist, includeItems }, cursor, limit, async () => {
         const playlistId = extractPlaylistId(playlist);
         const cursorFilters = { playlistId, includeItems };
         if (!includeItems && cursor) {
@@ -1221,7 +1239,7 @@ export function createYoutubeMcpServer(
             : ["data.title", "data.description", "data.channelTitle"],
           config,
         );
-      }, config.maxResultBytes),
+      }),
   );
 
   server.registerResource(

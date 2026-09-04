@@ -406,7 +406,7 @@ describe("public tool routing", () => {
           }),
         expected: {
           kind: "collection",
-          data: { provider: "global-provider", totalResults: 1 },
+          data: { provider: "global-provider", totalResults: 1, totalResultsReliable: false },
           items: [{ id: "global-video", title: "Global", channelTitle: "Global channel" }],
           page: { returned: 1, has_more: false, next_cursor: null },
           canonical_uri: null,
@@ -432,6 +432,7 @@ describe("public tool routing", () => {
           kind: "collection",
           data: {
             provider: "channel-search-provider",
+            totalResultsReliable: false,
             channel: { id: CHANNEL_ID, title: "Channel" },
           },
           items: [{ id: "matched-video", title: "Godot tutorial", channelTitle: "Channel" }],
