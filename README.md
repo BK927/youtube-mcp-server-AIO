@@ -65,7 +65,7 @@ pwsh -File .\scripts\deploy-cloud-run.ps1 -ProjectId "YOUR_PROJECT_ID" -Promote
 
 Deployment requires a clean Git worktree. It builds a full Git SHA tag, resolves the Artifact Registry digest, creates a tagged zero-traffic candidate, checks `/health`, OAuth discovery, bearer rejection, the exact four-tool contract, a multi-video transcript matrix, bounded comments/replies, and locale-region inference, and promotes only with `-Promote`. ChatGPT uses Authorization Code + PKCE with a private personal access key; Codex can continue using the existing bearer. See [docs/CLOUD_RUN.md](docs/CLOUD_RUN.md).
 
-Cloud plugin configuration lives in `.mcp.json`. `scripts/sync-codex-plugin.ps1` can build local or cloud plugin profiles, but changes the user's plugin installation and is not part of CI or deployment.
+Remote plugin configuration lives in `.mcp.json` and currently targets the Raspberry Pi deployment. `scripts/sync-codex-plugin.ps1` can build local or remote plugin profiles, but changes the user's plugin installation and is not part of CI or deployment. The Cloud Run deployment remains documented as an optional rollback or alternative hosting target.
 
 Hosts that implement OpenAI [Tool Search](https://developers.openai.com/api/docs/guides/tools-tool-search) can defer this server's definitions until YouTube work is actually selected. Enable `tool_search` and mark the MCP tool as `defer_loading` in the host/API tool configuration; do not add `defer_loading` to this plugin's `.mcp.json`, which follows the [Codex plugin packaging contract](https://developers.openai.com/plugins/build/plugins).
 
