@@ -31,6 +31,25 @@ afterEach(() => {
 });
 
 describe("YouTube Data API normalization", () => {
+  it.each([
+    ["true", true], ["false", false], [undefined, null],
+  ])("distinguishes the caption flag %s from transcript retrievability", async (caption, reportedAvailable) => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      items: [{ id: "dQw4w9WgXcQ", contentDetails: { caption } }],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new YouTubeDataApiClient("test-key", 5000, quotaStore().quota);
+    expect(await client.getVideo("dQw4w9WgXcQ")).toMatchObject({
+      captionAvailable: caption === "true",
+      captionAvailability: {
+        source: "youtube-data-api-v3.contentDetails.caption",
+        reportedAvailable,
+        transcriptRetrievability: "unknown",
+        notice: expect.stringContaining("view=transcript"),
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it("resolves handles exactly and never substitutes a search hit for a missing handle", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({ items: [{ id: CHANNEL_ID }] }))

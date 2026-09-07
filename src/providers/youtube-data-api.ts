@@ -233,7 +233,15 @@ function normalizeVideo(item: VideoItem): Record<string, unknown> {
     durationSeconds: parseIso8601Duration(duration) ?? null,
     definition: item.contentDetails?.definition ?? null,
     dimension: item.contentDetails?.dimension ?? null,
+    // Compatibility alias for the Data API flag, not a transcript probe.
     captionAvailable: item.contentDetails?.caption === "true",
+    captionAvailability: {
+      source: "youtube-data-api-v3.contentDetails.caption",
+      reportedAvailable: item.contentDetails?.caption === "true" ? true
+        : item.contentDetails?.caption === "false" ? false : null,
+      transcriptRetrievability: "unknown",
+      notice: "The Data API caption flag does not determine whether this MCP's separate transcript providers can retrieve captions, including automatic captions. Use view=transcript to check.",
+    },
     licensedContent: item.contentDetails?.licensedContent ?? null,
     projection: item.contentDetails?.projection ?? null,
     statistics: item.statistics ?? {},
