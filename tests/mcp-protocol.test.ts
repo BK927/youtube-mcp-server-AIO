@@ -1,6 +1,7 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 import { createYoutubeMcpServer } from "../src/server.js";
+import { outputSchemas } from "../src/output-schemas.js";
 import type { YouTubeService } from "../src/youtube-service.js";
 import { testAppConfig } from "./helpers.js";
 
@@ -48,12 +49,30 @@ describe("MCP protocol surface", () => {
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name)).toEqual(TOOL_NAMES);
       expect(Buffer.byteLength(JSON.stringify(tools), "utf8")).toBeLessThanOrEqual(
-        3_000,
+        18_000,
       );
       for (const tool of tools) {
         expect(Buffer.byteLength(JSON.stringify(tool), "utf8")).toBeLessThanOrEqual(
-          1_000,
+          6_000,
         );
+        expect(tool.outputSchema).toMatchObject({
+          type: "object",
+          required: ["schema_version", "kind", "data", "items", "job", "page", "meta"],
+          properties: {
+            data: { type: "object" },
+            items: { type: "array" },
+            page: {
+              required: ["returned", "has_more", "next_cursor"],
+              properties: { next_cursor: { type: ["string", "null"] } },
+            },
+            meta: {
+              properties: {
+                provider: { type: "string" },
+                warnings: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        });
         expect(
           Buffer.byteLength(tool.description ?? "", "utf8"),
         ).toBeLessThanOrEqual(180);
@@ -207,11 +226,13 @@ describe("MCP protocol surface", () => {
     } as unknown as YouTubeService;
     const { client, server } = await connectedClient({ service: fakeService });
     try {
+      await client.listTools();
       const success = await client.callTool({
         name: "youtube_channel_get",
         arguments: { channel: "UC123", select: ["profile", "statistics"] },
       });
       expect(success.isError).not.toBe(true);
+      expect(outputSchemas.youtube_channel_get.safeParse(success.structuredContent).success).toBe(true);
       expect(success.content).toEqual([
         { type: "text", text: "entity completed; returned=0; more=no." },
       ]);
@@ -264,6 +285,55 @@ describe("MCP protocol surface", () => {
         "message",
         "retryable",
         "schema_uri",
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects malformed declared fields without discarding extra provider fields", async () => {
+    const service = {
+      getVideo: async () => ({
+        id: "dQw4w9WgXcQ",
+        title: "Video",
+        provider: "test-provider",
+        providerSpecific: { evidence: "retained" },
+      }),
+      getChannel: async () => ({ statistics: { subscriberCount: 10 } }),
+    } as unknown as YouTubeService;
+    const { client, server } = await connectedClient({ service });
+    try {
+      // Discovery also enables the client's JSON Schema output validation.
+      await client.listTools();
+      const success = await client.callTool({
+        name: "youtube_video_get",
+        arguments: { video: "dQw4w9WgXcQ" },
+      });
+      expect(success.isError).not.toBe(true);
+      expect(success.structuredContent).toMatchObject({
+        data: { providerSpecific: { evidence: "retained" } },
+      });
+      const schema = outputSchemas.youtube_video_get;
+      const envelope = success.structuredContent as Record<string, unknown>;
+      expect(schema.safeParse(envelope).success).toBe(true);
+      for (const invalid of [
+        { ...envelope, page: { returned: "1", has_more: false, next_cursor: null } },
+        { ...envelope, meta: { ...(envelope.meta as object), warnings: "warning" } },
+        { ...envelope, data: { title: 123 } },
+        { ...envelope, items: [{ index: "0", text: "segment" }] },
+        { ...envelope, job: { status: "queued" } },
+      ]) {
+        expect(schema.safeParse(invalid).success).toBe(false);
+      }
+      const invalidOutput = await client.callTool({
+        name: "youtube_channel_get",
+        arguments: { channel: "UC123", select: ["statistics"] },
+      });
+      expect(invalidOutput.isError).toBe(true);
+      expect(invalidOutput.structuredContent).toBeUndefined();
+      expect(invalidOutput.content).toEqual([
+        { type: "text", text: expect.stringContaining("Output validation error") },
       ]);
     } finally {
       await client.close();

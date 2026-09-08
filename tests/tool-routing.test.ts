@@ -16,6 +16,9 @@ async function connectedClient(service: Partial<YouTubeService>) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
+  // Compile the advertised output schemas and validate every golden route's
+  // structured response at both the server and the protocol client boundary.
+  await client.listTools();
   return { client, server };
 }
 

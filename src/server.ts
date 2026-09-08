@@ -9,6 +9,7 @@ import { CursorCodec } from "./cursor.js";
 import { YouTubeMcpError } from "./errors.js";
 import { SERVER_NAME, SERVER_VERSION } from "./meta.js";
 import { runTool, type ToolPayload } from "./mcp-response.js";
+import { outputSchemas } from "./output-schemas.js";
 import { ResponsePager } from "./response-pager.js";
 import { FirestorePageStore } from "./cache/response-page-store.js";
 import type { AppConfig } from "./types.js";
@@ -677,6 +678,7 @@ export function createYoutubeMcpServer(
     "youtube_video_get",
     {
       description: "Get video data. max_chars: text only. View options: youtube://schema/youtube_video_get.",
+      outputSchema: outputSchemas.youtube_video_get,
       inputSchema: z.object({
         video: z.string().min(1),
         view: z.enum(["metadata", "transcript", "comments"]).default("metadata"),
@@ -889,6 +891,7 @@ export function createYoutubeMcpServer(
     "youtube_search",
     {
       description: "Search videos/transcripts. Scope filters: youtube://schema/youtube_search. Trending returns compact metadata.",
+      outputSchema: outputSchemas.youtube_search,
       inputSchema: z.object({
         scope: z.enum(["global", "channel", "transcript", "trending"]).default("global"),
         query: z.string().default(""),
@@ -1154,6 +1157,7 @@ export function createYoutubeMcpServer(
     "youtube_channel_get",
     {
       description: "Resolve and get one YouTube channel profile.",
+      outputSchema: outputSchemas.youtube_channel_get,
       inputSchema: z.object({
         channel: z.string().min(1),
         select: z
@@ -1186,6 +1190,7 @@ export function createYoutubeMcpServer(
     "youtube_playlist_get",
     {
       description: "Get playlist metadata or one signed page of playlist items.",
+      outputSchema: outputSchemas.youtube_playlist_get,
       inputSchema: z.object({
         playlist: z.string().min(1),
         include_items: z.boolean().default(true),

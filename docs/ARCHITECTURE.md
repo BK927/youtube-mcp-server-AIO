@@ -24,6 +24,7 @@ Cloud state: bounded per-instance cache + transactional Firestore quota store
 ## Boundaries
 
 - `src/server.ts` owns the four public tool names, schemas, annotations, cursors, and result shaping.
+- `src/output-schemas.ts` declares each tool's success `outputSchema`: the required envelope and typed core fields for its views/scopes. Provider- and selection-dependent fields are optional, and extra provider fields remain intact. Synchronous tools keep `job` empty; errors retain their separate `isError` envelope and are exempt from success-schema validation.
 - `src/youtube-service.ts` resolves references, chooses providers, applies cache/quota controls, and returns provider-neutral data.
 - `src/providers` isolates official and unofficial upstream behavior.
 - `src/quota/quota-store.ts` supplies memory and Firestore adapters behind one contract.
@@ -43,6 +44,8 @@ Tool responses contain:
 - a bounded structured error with a schema URI.
 
 Default results are limited to 12,288 bytes and hard-limited to 32,768 bytes. Comment replies are disabled by default; when enabled, `reply_limit` and a text-aware cap preserve IDs, authors, and timestamps instead of blanking structural fields. Video transcript/comment and playlist/search collections use opaque continuation cursors instead of returning unbounded arrays. Resource templates expose schemas and individual entities without adding more tool schemas.
+
+The protocol tests cap `tools/list` at 18,000 bytes total and 6,000 bytes per tool, including output schemas (16,658 bytes total when introduced). They validate all view/scope fixtures against the advertised schemas and require malformed structured outputs to be rejected. Tool names, inputs, response data, and error envelopes are unchanged.
 
 ## State
 
