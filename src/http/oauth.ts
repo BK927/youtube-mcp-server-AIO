@@ -205,7 +205,7 @@ export class PersonalOAuthServer {
       authorization_servers: [this.config.issuer],
       scopes_supported: [this.config.scope],
       bearer_methods_supported: ["header"],
-      resource_name: "YouTube MCP AIO",
+      resource_name: "YouTube Research MCP Server",
     };
   }
 
@@ -435,7 +435,7 @@ export class PersonalOAuthServer {
     sendHtml(
       response,
       error ? 401 : 200,
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect YouTube MCP</title><style>body{font:16px system-ui;max-width:32rem;margin:12vh auto;padding:1.5rem;color:#17202a}input,button{box-sizing:border-box;width:100%;padding:.8rem;margin:.4rem 0}button{cursor:pointer}.error{color:#b42318}</style></head><body><h1>Connect YouTube MCP</h1><p>Enter the private access key for this personal server.</p>${errorHtml}<form method="post" action="/oauth/login"><input type="hidden" name="transaction" value="${escapeHtml(transaction)}"><label>Access key<input type="password" name="access_key" autocomplete="current-password" required autofocus></label><button type="submit">Authorize ChatGPT</button></form></body></html>`,
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect YouTube Research MCP Server</title><style>body{font:16px system-ui;max-width:32rem;margin:12vh auto;padding:1.5rem;color:#17202a}input,button{box-sizing:border-box;width:100%;padding:.8rem;margin:.4rem 0}button{cursor:pointer}.error{color:#b42318}</style></head><body><h1>Connect YouTube Research MCP Server</h1><p>Enter the private access key for this personal server.</p>${errorHtml}<form method="post" action="/oauth/login"><input type="hidden" name="transaction" value="${escapeHtml(transaction)}"><label>Access key<input type="password" name="access_key" autocomplete="current-password" required autofocus></label><button type="submit">Authorize ChatGPT</button></form></body></html>`,
     );
   }
 

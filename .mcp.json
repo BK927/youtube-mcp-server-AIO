@@ -2,7 +2,7 @@
   "mcpServers": {
     "youtube-mcp-aio": {
       "type": "http",
-      "url": "https://home-raspberrypi.tail876727.ts.net/mcp",
+      "url": "https://youtube-mcp.example.com/mcp",
       "bearer_token_env_var": "YOUTUBE_MCP_ACCESS_TOKEN"
     }
   }

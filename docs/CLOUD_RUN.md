@@ -1,6 +1,6 @@
-# YouTube MCP AIO on Google Cloud Run
+# YouTube Research MCP Server on Google Cloud Run
 
-This is the fixed Google Cloud production profile for YouTube MCP AIO 1.1.1. No live deployment was run as part of this refactor.
+This is the fixed Google Cloud profile for YouTube Research MCP Server 1.1.1. No live deployment was run as part of this refactor.
 
 ## Fixed v1 resources
 
@@ -9,23 +9,25 @@ This is the fixed Google Cloud production profile for YouTube MCP AIO 1.1.1. No 
 | Artifact Registry | `mcp/youtube-mcp-aio` | `asia-northeast1` | private |
 | Cloud Run ingress | `youtube-mcp-aio` / `mcp` | 1 vCPU, 1 GiB, concurrency 4, timeout 300 s, min 0, max 2 | public ingress; bearer or OAuth required at `/mcp` |
 | Cloud Run sidecar | `pot-provider` | 0.25 vCPU, 512 MiB per service instance | localhost-only PO-token minting for `yt-dlp` |
-| Firestore | `(default)` / `youtube_quota` | Native mode, `asia-northeast1` | runtime identity only |
+| Firestore | `(default)` / `youtube_quota`, `youtube_response_pages`, `youtube_oauth_codes` | Native mode, `asia-northeast1` | runtime identity only |
 | API key | `youtube-mcp-aio-v1` | restricted to `youtube.googleapis.com` | Secret Manager injection only |
 
-The transport is stateless. The bounded cache remains process-local, while the daily ordinary/search quota counters use Firestore transactions (`YOUTUBE_QUOTA_STORE=firestore`). At most two instances provide modest availability while keeping cache duplication and unofficial provider traffic conservative; Firestore preserves quota correctness across instances and restarts.
+The transport is stateless. The short-lived response cache remains process-local. Daily ordinary/search quota counters use Firestore transactions (`YOUTUBE_QUOTA_STORE=firestore`), signed continuation snapshots use `youtube_response_pages`, and one-time OAuth codes use `youtube_oauth_codes`. At most two instances provide modest availability while keeping cache duplication and unofficial provider traffic conservative; Firestore preserves those shared records across instances and restarts.
 
 ## Identity and secrets
 
 `youtube-mcp-runner` receives only:
 
-- `roles/datastore.user` for the quota collection;
+- `roles/datastore.user` for the quota, continuation-page, and OAuth-code collections;
 - Secret Accessor on `youtube-mcp-access-token`;
 - Secret Accessor on `youtube-mcp-cursor-secret`;
+- Secret Accessor on `youtube-mcp-oauth-login-secret`;
+- Secret Accessor on `youtube-mcp-oauth-signing-secret`;
 - Secret Accessor on `youtube-data-api-key`.
 
 The Cloud Build default identity receives Artifact Registry writer on repository `mcp`, not a project-wide runtime role. Cloud Run secret references always use enabled numeric versions. `:latest` is not used.
 
-The main Cloud Run URL is public because private Codex clients need to reach it; the application rejects `/mcp` without its bearer. This is a private single-operator boundary, not standards-based multi-user MCP OAuth.
+The main Cloud Run URL is public because private MCP clients need to reach it; the application rejects `/mcp` without either its fixed bearer or a valid token from the included personal OAuth flow. This remains a private single-operator boundary, not a general multi-user authorization service.
 
 ## Image pins
 
@@ -50,11 +52,11 @@ pwsh -File .\scripts\provision-gcp.ps1 `
   -Region "asia-northeast1"
 ```
 
-The script enables APIs, creates the regional registry and runtime identity, creates a YouTube Data API key restricted to `youtube.googleapis.com`, initializes its secret only if missing, initializes independent MCP bearer and cursor-signing secrets only if missing, grants service-specific secret IAM, and creates/validates Firestore Native mode. Keeping the cursor key independent prevents a bearer rotation from invalidating still-live 24-hour cursors.
+The script enables APIs, creates the regional registry and runtime identity, creates a YouTube Data API key restricted to `youtube.googleapis.com`, initializes its secret only if missing, initializes independent MCP bearer, cursor-signing, OAuth login, and OAuth signing secrets only if missing, grants service-specific secret IAM, and creates/validates Firestore Native mode. Keeping the cursor key independent prevents a bearer rotation from invalidating still-live 24-hour cursors.
 
-If `(default)` Firestore already exists in another location, provisioning stops. Firestore location cannot be casually moved and the two MCP services should use the same `asia-northeast1` database if they share a project.
+If `(default)` Firestore already exists in another location, provisioning stops. Firestore location cannot be casually moved, so choose the project and region deliberately before provisioning this service.
 
-Provisioning does not configure Google account OAuth. No OAuth setup, callback, refresh-token secret, or account-scoped route exists in 1.1.0.
+Provisioning does not configure Google account OAuth. No Google account OAuth setup, callback, refresh-token secret, or account-scoped route exists in 1.1.1.
 
 ## Candidate deployment
 

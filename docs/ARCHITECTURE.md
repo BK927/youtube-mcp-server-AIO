@@ -1,6 +1,6 @@
 # Architecture
 
-YouTube MCP AIO 1.1.1 optimizes for a small, coherent MCP surface and bounded evidence rather than endpoint coverage.
+YouTube Research MCP Server 1.1.1 optimizes for a small, coherent MCP surface and bounded evidence rather than endpoint coverage.
 
 ```text
 Local client --stdio--------------------.

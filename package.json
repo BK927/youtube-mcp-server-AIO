@@ -1,7 +1,16 @@
 {
   "name": "youtube-mcp-server-aio",
   "version": "1.1.1",
-  "description": "Evidence-first, quota-aware all-in-one YouTube MCP server",
+  "description": "Read-only YouTube research MCP server for transcripts, video metadata, comments, search, channels, playlists, and trending",
+  "author": "BK927",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BK927/youtube-research-mcp.git"
+  },
+  "homepage": "https://github.com/BK927/youtube-research-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/BK927/youtube-research-mcp/issues"
+  },
   "type": "module",
   "bin": {
     "youtube-mcp-aio": "dist/index.js"
@@ -28,8 +37,14 @@
   "keywords": [
     "mcp",
     "youtube",
+    "youtube-api",
+    "youtube-transcript",
     "transcript",
-    "model-context-protocol"
+    "model-context-protocol",
+    "ai-agents",
+    "video-research",
+    "yt-dlp",
+    "cloud-run"
   ],
   "license": "MIT",
   "dependencies": {

@@ -37,6 +37,11 @@ assert set(companion["mcpServers"]) == {"youtube-mcp-aio"}
 remote = companion["mcpServers"]["youtube-mcp-aio"]
 assert remote["type"] == "http" and remote["url"].endswith("/mcp")
 assert remote["bearer_token_env_var"] == "YOUTUBE_MCP_ACCESS_TOKEN"
+assert remote["url"] == "https://youtube-mcp.example.com/mcp"
+assert package["repository"]["url"] == "git+https://github.com/BK927/youtube-research-mcp.git"
+assert package["homepage"] == "https://github.com/BK927/youtube-research-mcp#readme"
+assert package["bugs"]["url"] == "https://github.com/BK927/youtube-research-mcp/issues"
+assert package["author"] == "BK927"
 
 server_source = (ROOT / "src" / "server.ts").read_text(encoding="utf-8")
 registered = set(re.findall(r'registerTool\(\s*"([^"]+)"', server_source))
